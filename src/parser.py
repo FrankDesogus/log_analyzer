@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from datetime import datetime, timezone
 import os
@@ -50,6 +51,7 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
     current_mac = extract_mac(message)
     client_mac, ap_mac, mac = extract_client_ap_mac(message, current_mac)
     internal_event_ts = extract_internal_event_ts(message)
+    internal_event_ts_float = to_float_or_none(internal_event_ts)
     timestamp = f'{data["month"]} {data["day"]} {data["time"]}'
 
     return ParsedEvent(
@@ -72,7 +74,8 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         radio=extract_radio(message),
         rssi=extract_rssi(message),
         internal_event_ts=internal_event_ts,
-        internal_event_ts_float=to_float_or_none(internal_event_ts),
+        internal_event_ts_float=internal_event_ts_float,
+        internal_event_bucket_10ms=build_internal_event_bucket_10ms(internal_event_ts_float),
         raw_line=stripped_line,
     )
 
@@ -185,14 +188,27 @@ def resolve_log_year() -> Optional[int]:
 
 
 def build_fine_duplicate_group_key(event: ParsedEvent) -> Optional[str]:
-    if not event.internal_event_ts or not event.client_mac or not event.event_type:
+    mac_for_fine_key = event.client_mac or event.mac
+    if (
+        event.internal_event_bucket_10ms is None
+        or not mac_for_fine_key
+        or not event.event_type
+    ):
         return None
 
     key_parts = [
         event.source_ip or "",
-        event.client_mac,
+        mac_for_fine_key,
         event.radio or "",
         event.event_type,
-        event.internal_event_ts,
+        event.internal_event_bucket_10ms,
     ]
     return "|".join(key_parts)
+
+
+def build_internal_event_bucket_10ms(internal_event_ts_float: Optional[float]) -> Optional[str]:
+    if internal_event_ts_float is None:
+        return None
+
+    bucket_start = math.floor(internal_event_ts_float * 100) / 100
+    return f"{bucket_start:.2f}"
