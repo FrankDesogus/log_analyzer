@@ -69,7 +69,8 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
 
 
 def parse_file(input_path: Path, output_path: Path) -> None:
-    parsed_events: list[dict] = []
+    parsed_records: list[ParsedEvent] = []
+    group_sizes: dict[str, int] = {}
 
     with input_path.open("r", encoding="utf-8", errors="ignore") as file_in:
         for line_number, line in enumerate(file_in, start=1):
@@ -78,10 +79,39 @@ def parse_file(input_path: Path, output_path: Path) -> None:
                 continue
 
             parsed.line_number = line_number
-            parsed_events.append(parsed.to_dict())
+            duplicate_group_key = build_duplicate_group_key(parsed)
+            parsed.duplicate_group_key = duplicate_group_key
+            if duplicate_group_key is not None:
+                group_sizes[duplicate_group_key] = group_sizes.get(duplicate_group_key, 0) + 1
+            parsed_records.append(parsed)
+
+    parsed_events: list[dict] = []
+    for record in parsed_records:
+        if record.duplicate_group_key is not None:
+            group_size = group_sizes[record.duplicate_group_key]
+            record.duplicate_group_size = group_size
+            record.is_duplicate_candidate = group_size > 1
+        else:
+            record.duplicate_group_size = 1
+            record.is_duplicate_candidate = False
+        parsed_events.append(record.to_dict())
 
     with output_path.open("w", encoding="utf-8") as file_out:
         json.dump(parsed_events, file_out, indent=2, ensure_ascii=False)
 
     print(f"Lette {len(parsed_events)} righe.")
     print(f"Output scritto in: {output_path}")
+
+
+def build_duplicate_group_key(event: ParsedEvent) -> Optional[str]:
+    if not event.timestamp or not event.client_mac or not event.event_type:
+        return None
+
+    key_parts = [
+        event.timestamp,
+        event.source_ip or "",
+        event.client_mac,
+        event.radio or "",
+        event.event_type,
+    ]
+    return "|".join(key_parts)
