@@ -86,7 +86,7 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
 
 def parse_file(input_path: Path, output_path: Path) -> None:
     parsed_records: list[ParsedEvent] = []
-    group_sizes: dict[str, int] = {}
+    coarse_group_sizes: dict[str, int] = {}
     fine_group_sizes: dict[str, int] = {}
 
     with input_path.open("r", encoding="utf-8", errors="ignore") as file_in:
@@ -96,11 +96,14 @@ def parse_file(input_path: Path, output_path: Path) -> None:
                 continue
 
             parsed.line_number = line_number
+            # Coarse duplicate grouping: usa il timestamp syslog (precisione al secondo).
             duplicate_group_key = build_duplicate_group_key(parsed)
             parsed.duplicate_group_key = duplicate_group_key
             if duplicate_group_key is not None:
-                group_sizes[duplicate_group_key] = group_sizes.get(duplicate_group_key, 0) + 1
+                coarse_group_sizes[duplicate_group_key] = coarse_group_sizes.get(duplicate_group_key, 0) + 1
 
+            # Fine duplicate grouping: usa il timestamp interno del device/kernel
+            # (precisione molto più alta rispetto al syslog).
             fine_duplicate_group_key = build_fine_duplicate_group_key(parsed)
             parsed.fine_duplicate_group_key = fine_duplicate_group_key
             if fine_duplicate_group_key is not None:
@@ -110,9 +113,9 @@ def parse_file(input_path: Path, output_path: Path) -> None:
     parsed_events: list[dict] = []
     for record in parsed_records:
         if record.duplicate_group_key is not None:
-            group_size = group_sizes[record.duplicate_group_key]
-            record.duplicate_group_size = group_size
-            record.is_duplicate_candidate = group_size > 1
+            coarse_group_size = coarse_group_sizes[record.duplicate_group_key]
+            record.duplicate_group_size = coarse_group_size
+            record.is_duplicate_candidate = coarse_group_size > 1
         else:
             record.duplicate_group_size = 1
             record.is_duplicate_candidate = False
@@ -134,6 +137,7 @@ def parse_file(input_path: Path, output_path: Path) -> None:
 
 
 def build_duplicate_group_key(event: ParsedEvent) -> Optional[str]:
+    # Chiave per il grouping "coarse": stesso secondo syslog + attributi evento.
     if not event.timestamp or not event.client_mac or not event.event_type:
         return None
 
@@ -192,17 +196,20 @@ def resolve_log_year() -> Optional[int]:
 
 
 def build_fine_duplicate_group_key(event: ParsedEvent) -> Optional[str]:
-    mac_for_fine_key = event.client_mac or event.mac
+    # Chiave per il grouping "fine": bucket del timestamp interno + attributi evento.
+    # Nota: hostapd/wevent spesso non includono internal_event_ts, quindi non entrano
+    # nel fine grouping ma restano nel coarse grouping.
+    mac_for_fine_grouping = event.client_mac or event.mac
     if (
         event.internal_event_bucket is None
-        or not mac_for_fine_key
+        or not mac_for_fine_grouping
         or not event.event_type
     ):
         return None
 
     key_parts = [
         event.source_ip or "",
-        mac_for_fine_key,
+        mac_for_fine_grouping,
         event.radio or "",
         event.event_type,
         event.internal_event_bucket,
@@ -221,9 +228,11 @@ def _bucket_decimal_places(bucket_ms: int) -> int:
 def build_internal_event_bucket(
     internal_event_ts_float: Optional[float], bucket_ms: int = FINE_DUPLICATE_BUCKET_MS
 ) -> Optional[str]:
+    # Senza timestamp interno non si può fare fine grouping.
     if internal_event_ts_float is None:
         return None
 
+    # Bucket temporale su timestamp interno (kernel/device), non sul syslog timestamp.
     bucket_seconds = bucket_ms / 1000
     bucket_start = math.floor(internal_event_ts_float / bucket_seconds) * bucket_seconds
     decimals = _bucket_decimal_places(bucket_ms)
