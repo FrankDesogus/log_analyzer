@@ -1,5 +1,7 @@
 import json
 import re
+from datetime import datetime, timezone
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -48,11 +50,14 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
     current_mac = extract_mac(message)
     client_mac, ap_mac, mac = extract_client_ap_mac(message, current_mac)
     internal_event_ts = extract_internal_event_ts(message)
+    timestamp = f'{data["month"]} {data["day"]} {data["time"]}'
 
     return ParsedEvent(
         parse_status="parsed",
         source_ip=data["source_ip"],
-        timestamp=f'{data["month"]} {data["day"]} {data["time"]}',
+        timestamp=timestamp,
+        original_timestamp=timestamp,
+        normalized_timestamp=normalize_timestamp(timestamp),
         host=data["host"],
         facility=data["facility"],
         severity=data["severity"],
@@ -67,6 +72,7 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         radio=extract_radio(message),
         rssi=extract_rssi(message),
         internal_event_ts=internal_event_ts,
+        internal_event_ts_float=to_float_or_none(internal_event_ts),
         raw_line=stripped_line,
     )
 
@@ -142,6 +148,40 @@ def extract_internal_event_ts(raw_message: Optional[str]) -> Optional[str]:
     if match:
         return match.group(1)
     return None
+
+
+def to_float_or_none(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def normalize_timestamp(timestamp: Optional[str]) -> Optional[str]:
+    if not timestamp:
+        return None
+
+    year = resolve_log_year()
+    if year is None:
+        return None
+
+    try:
+        normalized = datetime.strptime(f"{year} {timestamp}", "%Y %b %d %H:%M:%S")
+    except ValueError:
+        return None
+    return normalized.isoformat()
+
+
+def resolve_log_year() -> Optional[int]:
+    configured_year = os.environ.get("UNIFI_LOG_YEAR")
+    if configured_year is not None:
+        try:
+            return int(configured_year)
+        except ValueError:
+            return None
+    return datetime.now(timezone.utc).year
 
 
 def build_fine_duplicate_group_key(event: ParsedEvent) -> Optional[str]:
