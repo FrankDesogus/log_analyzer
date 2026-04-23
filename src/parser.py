@@ -30,6 +30,10 @@ HEADER_RE = re.compile(
 )
 INTERNAL_EVENT_TS_RE = re.compile(r"\[(\d+\.\d+)\]")
 
+# Configurabile per adattare il raggruppamento fine a burst quasi-identici
+# entro finestre temporali molto strette.
+FINE_DUPLICATE_BUCKET_MS = 10
+
 
 def parse_line(line: str) -> Optional[ParsedEvent]:
     stripped_line = line.strip()
@@ -75,7 +79,7 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         rssi=extract_rssi(message),
         internal_event_ts=internal_event_ts,
         internal_event_ts_float=internal_event_ts_float,
-        internal_event_bucket_10ms=build_internal_event_bucket_10ms(internal_event_ts_float),
+        internal_event_bucket=build_internal_event_bucket(internal_event_ts_float),
         raw_line=stripped_line,
     )
 
@@ -190,7 +194,7 @@ def resolve_log_year() -> Optional[int]:
 def build_fine_duplicate_group_key(event: ParsedEvent) -> Optional[str]:
     mac_for_fine_key = event.client_mac or event.mac
     if (
-        event.internal_event_bucket_10ms is None
+        event.internal_event_bucket is None
         or not mac_for_fine_key
         or not event.event_type
     ):
@@ -201,14 +205,26 @@ def build_fine_duplicate_group_key(event: ParsedEvent) -> Optional[str]:
         mac_for_fine_key,
         event.radio or "",
         event.event_type,
-        event.internal_event_bucket_10ms,
+        event.internal_event_bucket,
     ]
     return "|".join(key_parts)
 
 
-def build_internal_event_bucket_10ms(internal_event_ts_float: Optional[float]) -> Optional[str]:
+def _bucket_decimal_places(bucket_ms: int) -> int:
+    if bucket_ms % 100 == 0:
+        return 1
+    if bucket_ms % 10 == 0:
+        return 2
+    return 3
+
+
+def build_internal_event_bucket(
+    internal_event_ts_float: Optional[float], bucket_ms: int = FINE_DUPLICATE_BUCKET_MS
+) -> Optional[str]:
     if internal_event_ts_float is None:
         return None
 
-    bucket_start = math.floor(internal_event_ts_float * 100) / 100
-    return f"{bucket_start:.2f}"
+    bucket_seconds = bucket_ms / 1000
+    bucket_start = math.floor(internal_event_ts_float / bucket_seconds) * bucket_seconds
+    decimals = _bucket_decimal_places(bucket_ms)
+    return f"{bucket_start:.{decimals}f}"
