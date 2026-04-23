@@ -16,6 +16,8 @@ class ParsedEvent:
     raw_message: Optional[str] = None
     event_type: Optional[str] = None
     mac: Optional[str] = None
+    client_mac: Optional[str] = None
+    ap_mac: Optional[str] = None
     radio: Optional[str] = None
     rssi: Optional[int] = None
 
