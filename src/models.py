@@ -29,6 +29,7 @@ class ParsedEvent:
     duplicate_group_size: int = 1
     internal_event_ts: Optional[str] = None
     internal_event_ts_float: Optional[float] = None
+    internal_event_bucket_10ms: Optional[str] = None
     fine_duplicate_group_key: Optional[str] = None
     fine_duplicate_group_size: int = 1
     is_fine_duplicate_candidate: bool = False
