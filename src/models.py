@@ -25,6 +25,10 @@ class ParsedEvent:
     duplicate_group_key: Optional[str] = None
     is_duplicate_candidate: bool = False
     duplicate_group_size: int = 1
+    internal_event_ts: Optional[str] = None
+    fine_duplicate_group_key: Optional[str] = None
+    fine_duplicate_group_size: int = 1
+    is_fine_duplicate_candidate: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
