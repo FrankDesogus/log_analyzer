@@ -16,6 +16,7 @@ class ParsedEvent:
     process_name: Optional[str] = None
     raw_message: Optional[str] = None
     event_type: Optional[str] = None
+    event_category: Optional[str] = None
     mac: Optional[str] = None
     client_mac: Optional[str] = None
     ap_mac: Optional[str] = None
