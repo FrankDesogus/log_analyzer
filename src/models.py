@@ -9,6 +9,8 @@ class ParsedEvent:
     line_number: Optional[int] = None
     source_ip: Optional[str] = None
     timestamp: Optional[str] = None
+    original_timestamp: Optional[str] = None
+    normalized_timestamp: Optional[str] = None
     host: Optional[str] = None
     facility: Optional[str] = None
     severity: Optional[str] = None
@@ -26,6 +28,7 @@ class ParsedEvent:
     is_duplicate_candidate: bool = False
     duplicate_group_size: int = 1
     internal_event_ts: Optional[str] = None
+    internal_event_ts_float: Optional[float] = None
     fine_duplicate_group_key: Optional[str] = None
     fine_duplicate_group_size: int = 1
     is_fine_duplicate_candidate: bool = False
