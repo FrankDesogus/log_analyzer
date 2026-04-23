@@ -4,7 +4,13 @@ from pathlib import Path
 from typing import Optional
 
 from src.classifiers import classify_event_type
-from src.extractors import extract_mac, extract_process_and_message, extract_radio, extract_rssi
+from src.extractors import (
+    extract_mac,
+    extract_process_and_message,
+    extract_process_name,
+    extract_radio,
+    extract_rssi,
+)
 from src.models import ParsedEvent
 
 
@@ -34,6 +40,7 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
 
     data = header_match.groupdict()
     process, message = extract_process_and_message(data["rest"])
+    process_name = extract_process_name(process, message)
 
     return ParsedEvent(
         parse_status="parsed",
@@ -43,6 +50,7 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         facility=data["facility"],
         severity=data["severity"],
         process=process,
+        process_name=process_name,
         raw_message=message,
         event_type=classify_event_type(message),
         mac=extract_mac(message),

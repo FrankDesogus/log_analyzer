@@ -13,6 +13,7 @@ class ParsedEvent:
     facility: Optional[str] = None
     severity: Optional[str] = None
     process: Optional[str] = None
+    process_name: Optional[str] = None
     raw_message: Optional[str] = None
     event_type: Optional[str] = None
     mac: Optional[str] = None
