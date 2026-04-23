@@ -5,6 +5,7 @@ from typing import Optional
 
 from src.classifiers import classify_event_type
 from src.extractors import (
+    extract_client_ap_mac,
     extract_mac,
     extract_process_and_message,
     extract_process_name,
@@ -41,6 +42,9 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
     data = header_match.groupdict()
     process, message = extract_process_and_message(data["rest"])
     process_name = extract_process_name(process, message)
+    event_type = classify_event_type(message)
+    current_mac = extract_mac(message)
+    client_mac, ap_mac, mac = extract_client_ap_mac(message, current_mac)
 
     return ParsedEvent(
         parse_status="parsed",
@@ -52,8 +56,10 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         process=process,
         process_name=process_name,
         raw_message=message,
-        event_type=classify_event_type(message),
-        mac=extract_mac(message),
+        event_type=event_type,
+        mac=mac,
+        client_mac=client_mac,
+        ap_mac=ap_mac,
         radio=extract_radio(message),
         rssi=extract_rssi(message),
         raw_line=stripped_line,
