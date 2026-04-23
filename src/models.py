@@ -22,6 +22,9 @@ class ParsedEvent:
     ap_mac: Optional[str] = None
     radio: Optional[str] = None
     rssi: Optional[int] = None
+    duplicate_group_key: Optional[str] = None
+    is_duplicate_candidate: bool = False
+    duplicate_group_size: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
