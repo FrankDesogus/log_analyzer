@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.classifiers import classify_event_category, classify_event_type
+from src.correlation import build_canonical_events
 from src.extractors import (
     extract_client_ap_mac,
     extract_mac,
@@ -85,6 +86,28 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
 
 
 def parse_file(input_path: Path, output_path: Path) -> None:
+    parsed_events = parse_file_to_events(input_path)
+
+    with output_path.open("w", encoding="utf-8") as file_out:
+        json.dump(parsed_events, file_out, indent=2, ensure_ascii=False)
+
+    print(f"Lette {len(parsed_events)} righe.")
+    print(f"Output scritto in: {output_path}")
+
+
+def parse_file_with_canonical_events(input_path: Path, output_path: Path) -> None:
+    parsed_events = parse_file_to_events(input_path)
+    correlated_payload = build_canonical_events(parsed_events)
+
+    with output_path.open("w", encoding="utf-8") as file_out:
+        json.dump(correlated_payload, file_out, indent=2, ensure_ascii=False)
+
+    print(f"Lette {len(parsed_events)} righe.")
+    print(f"Eventi canonici prodotti: {len(correlated_payload['canonical_events'])}")
+    print(f"Output scritto in: {output_path}")
+
+
+def parse_file_to_events(input_path: Path) -> list[dict]:
     parsed_records: list[ParsedEvent] = []
     coarse_group_sizes: dict[str, int] = {}
     fine_group_sizes: dict[str, int] = {}
@@ -96,14 +119,11 @@ def parse_file(input_path: Path, output_path: Path) -> None:
                 continue
 
             parsed.line_number = line_number
-            # Coarse duplicate grouping: usa il timestamp syslog (precisione al secondo).
             duplicate_group_key = build_duplicate_group_key(parsed)
             parsed.duplicate_group_key = duplicate_group_key
             if duplicate_group_key is not None:
                 coarse_group_sizes[duplicate_group_key] = coarse_group_sizes.get(duplicate_group_key, 0) + 1
 
-            # Fine duplicate grouping: usa il timestamp interno del device/kernel
-            # (precisione molto più alta rispetto al syslog).
             fine_duplicate_group_key = build_fine_duplicate_group_key(parsed)
             parsed.fine_duplicate_group_key = fine_duplicate_group_key
             if fine_duplicate_group_key is not None:
@@ -129,11 +149,7 @@ def parse_file(input_path: Path, output_path: Path) -> None:
             record.is_fine_duplicate_candidate = False
         parsed_events.append(record.to_dict())
 
-    with output_path.open("w", encoding="utf-8") as file_out:
-        json.dump(parsed_events, file_out, indent=2, ensure_ascii=False)
-
-    print(f"Lette {len(parsed_events)} righe.")
-    print(f"Output scritto in: {output_path}")
+    return parsed_events
 
 
 def build_duplicate_group_key(event: ParsedEvent) -> Optional[str]:
