@@ -137,7 +137,15 @@ MAC_TABLE_DELETE_RE = re.compile(
 PEER_REASSOC_REQ_RE = re.compile(r"peer_reassoc_req:\s*(?P<duration_usec>\d+)\s*usec", re.IGNORECASE)
 QOS_MAP_SUPPORT_RE = re.compile(r"entry\s+wcid\s*(?P<wcid>\d+)\s+QosMapSupport=(?P<qos_map_support>\d+)", re.IGNORECASE)
 STATION_IDLE_PROBE_RE = re.compile(
-    r"(?P<radio>rai?\d+):\s*Send NULL to STA-MAC\s+(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+idle\((?P<idle_seconds>\d+)\)\s+timeout\((?P<timeout_seconds>\d+)\)",
+    r"(?P<radio>rai?\d+):\s*Send NULL to STA(?:-MAC)?[-\s]+(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+idle\((?P<idle_seconds>\d+)\)\s+timeout\((?P<timeout_seconds>\d+)\)",
+    re.IGNORECASE,
+)
+HOSTAPD_STA_REMOVE_DETAILS_RE = re.compile(
+    r"(?P<radio>rai?\d+):\s*STA\s+(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+WPA:\s*calling\s+hostapd_drv_sta_remove\(\)",
+    re.IGNORECASE,
+)
+FAST_TRANSITION_ROAM_SEND_DETAILS_RE = re.compile(
+    r"WPA:\s*Send\s+FT:\s*RRB\s+UBNT\s+ROAM:\s*STA=(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+CurrentAP=(?P<ap_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})",
     re.IGNORECASE,
 )
 FAST_TRANSITION_ROAM_DETAILS_RE = re.compile(
@@ -146,6 +154,10 @@ FAST_TRANSITION_ROAM_DETAILS_RE = re.compile(
 )
 WIRELESS_AGG_DNS_TIMEOUT_DETAILS_RE = re.compile(
     r"wireless_agg_stats\.log_sta_anomalies\(\):.*?\bbssid=(?P<bssid>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}).*?\bradio=(?P<radio>[A-Za-z0-9_-]+).*?\bvap=(?P<vap>[A-Za-z0-9_-]+).*?\bsta=(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})(?:.*?\bsatisfaction_now=(?P<satisfaction_now>-?\d+))?",
+    re.IGNORECASE,
+)
+WIRELESS_AGG_STA_ANOMALY_DETAILS_RE = re.compile(
+    r"wireless_agg_stats\.log_sta_anomalies\(\):.*?\bbssid=(?P<bssid>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}).*?\bradio=(?P<radio>[A-Za-z0-9_-]+).*?\bvap=(?P<vap>[A-Za-z0-9_-]+).*?\bsta=(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})(?:.*?\bsatisfaction_now=(?P<satisfaction_now>-?\d+))?(?:.*?\banomalies=(?P<anomalies>[^,\]\s]*))?",
     re.IGNORECASE,
 )
 ACE_REPORTER_SAVE_CONFIG_DETAILS_RE = re.compile(
@@ -299,6 +311,7 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         timeout_seconds=additional_fields.get("timeout_seconds"),
         vap=additional_fields.get("vap"),
         satisfaction_now=additional_fields.get("satisfaction_now"),
+        anomalies=additional_fields.get("anomalies"),
         auth_failures=additional_fields.get("auth_failures"),
         sta_tracker_event_id=additional_fields.get("sta_tracker_event_id"),
         config_key=additional_fields.get("config_key"),
@@ -412,10 +425,17 @@ def parse_file(
     print(f"- unknown summary count: {quality_report['unknown_summary_count']}")
     print(f"- unknown counts consistent: {quality_report['unknown_files_are_consistent']}")
     print(f"- canonical unknown sequences: {quality_report['canonical_unknown_sequences']}")
-    print(f"- wifi security sequences: {quality_report['canonical_wifi_security_sequences']}")
+    print(
+        "- canonical unknown sequences truly unknown: "
+        f"{quality_report['canonical_unknown_sequences_truly_unknown']}"
+    )
+    print(
+        "- canonical unknown sequences with known event types: "
+        f"{quality_report['canonical_unknown_sequences_with_known_event_types']}"
+    )
     print(
         "- known event types inside unknown sequences: "
-        f"{quality_report['canonical_unknown_sequences_with_known_event_types']}"
+        f"{quality_report['known_event_types_inside_unknown_sequences']}"
     )
 
 
@@ -461,9 +481,11 @@ def build_parser_report(
     unknown_by_event_category = Counter((event.get("event_category") or "unknown") for event in unknown_events_full)
     unknown_with_client_mac_count = sum(1 for event in unknown_events_full if event.get("client_mac"))
     unknown_with_radio_count = sum(1 for event in unknown_events_full if event.get("radio"))
+    canonical_unknown_stats = summarize_canonical_unknown_sequences(canonical_events)
 
     return {
         "total_raw_events": len(parsed_events),
+        "total_parsed_events": sum(1 for event in parsed_events if (event.get("parse_status") or "") == "parsed"),
         "total_canonical_events": len(canonical_events),
         "parse_status_counts": dict(parse_status_counts),
         "event_type_counts": dict(event_type_counts),
@@ -480,10 +502,20 @@ def build_parser_report(
             ),
         },
         "unknown_event_count": unknown_event_count_total,
+        "unknown_events": unknown_event_count_total,
         "unknown_event_count_total": unknown_event_count_total,
         "unknown_events_exported_count": len(unknown_events),
         "unknown_exported_count": len(unknown_events),
         "unknown_unique_pattern_count": int(unknown_summary.get("unique_pattern_count", 0)),
+        "unknown_unique_patterns": int(unknown_summary.get("unique_pattern_count", 0)),
+        "canonical_unknown_sequences": canonical_unknown_stats["canonical_unknown_sequences"],
+        "canonical_unknown_sequences_truly_unknown": canonical_unknown_stats["canonical_unknown_sequences_truly_unknown"],
+        "canonical_unknown_sequences_with_known_event_types": canonical_unknown_stats[
+            "canonical_unknown_sequences_with_known_event_types"
+        ],
+        "known_event_types_inside_unknown_sequences": canonical_unknown_stats[
+            "known_event_types_inside_unknown_sequences"
+        ],
         "unknown_top_patterns": unknown_summary.get("top_patterns", []),
         "unknown_by_source_ip": dict(unknown_by_source_ip),
         "unknown_by_process_name": dict(unknown_by_process_name),
@@ -542,11 +574,39 @@ def build_quality_report(
         len(unknown_events) == unknown_summary_count == parser_report_unknown_count
     )
 
-    unknown_sequences = [
-        event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_unknown_sequence"
-    ]
+    canonical_unknown_stats = summarize_canonical_unknown_sequences(canonical_events)
     wifi_security_sequences = [
         event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_security_sequence"
+    ]
+
+    return {
+        "total_raw_events": len(parsed_events),
+        "total_parsed_events": sum(1 for event in parsed_events if (event.get("parse_status") or "") == "parsed"),
+        "total_canonical_events": len(canonical_events),
+        "unknown_events_exported": len(unknown_events),
+        "unknown_events": len(unknown_events),
+        "unknown_unique_patterns": int(unknown_summary.get("unique_pattern_count", 0)),
+        "unknown_summary_count": unknown_summary_count,
+        "parser_report_unknown_count": parser_report_unknown_count,
+        "unknown_files_are_consistent": unknown_files_are_consistent,
+        "canonical_unknown_sequences": canonical_unknown_stats["canonical_unknown_sequences"],
+        "canonical_wifi_security_sequences": len(wifi_security_sequences),
+        "canonical_unknown_sequences_truly_unknown": canonical_unknown_stats[
+            "canonical_unknown_sequences_truly_unknown"
+        ],
+        "canonical_unknown_sequences_with_known_event_types": canonical_unknown_stats[
+            "canonical_unknown_sequences_with_known_event_types"
+        ],
+        "known_event_types_inside_unknown_sequences": canonical_unknown_stats[
+            "known_event_types_inside_unknown_sequences"
+        ],
+        "top_unknown_patterns": unknown_summary.get("top_patterns", []),
+    }
+
+
+def summarize_canonical_unknown_sequences(canonical_events: list[dict[str, Any]]) -> dict[str, Any]:
+    unknown_sequences = [
+        event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_unknown_sequence"
     ]
     unknown_sequences_with_known_types = []
     known_types_counter: Counter[str] = Counter()
@@ -560,20 +620,10 @@ def build_quality_report(
             known_types_counter.update(known_types)
 
     return {
-        "total_raw_events": len(parsed_events),
-        "total_parsed_events": sum(1 for event in parsed_events if (event.get("parse_status") or "") == "parsed"),
-        "total_canonical_events": len(canonical_events),
-        "unknown_events_exported": len(unknown_events),
-        "unknown_unique_patterns": int(unknown_summary.get("unique_pattern_count", 0)),
-        "unknown_summary_count": unknown_summary_count,
-        "parser_report_unknown_count": parser_report_unknown_count,
-        "unknown_files_are_consistent": unknown_files_are_consistent,
         "canonical_unknown_sequences": len(unknown_sequences),
-        "canonical_wifi_security_sequences": len(wifi_security_sequences),
         "canonical_unknown_sequences_truly_unknown": len(unknown_sequences) - len(unknown_sequences_with_known_types),
         "canonical_unknown_sequences_with_known_event_types": len(unknown_sequences_with_known_types),
         "known_event_types_inside_unknown_sequences": dict(known_types_counter),
-        "top_unknown_patterns": unknown_summary.get("top_patterns", []),
     }
 
 
@@ -952,6 +1002,23 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                 "tracker_message_type": tracker_payload.get("message_type"),
             }
         )
+    if tracker_payload and str(tracker_payload.get("event_type") or "").strip().lower() == "sta_roam":
+        client_mac = to_lower_or_none(tracker_payload.get("mac"))
+        radio = to_lower_or_none(tracker_payload.get("vap"))
+        fields.update(
+            {
+                "event_type": "sta_tracker_roam",
+                "client_mac": client_mac,
+                "mac": client_mac,
+                "radio": radio,
+                "vap": radio,
+                "process_name": "stahtd",
+                "event_category": "wifi_roam",
+                "assoc_status": str(tracker_payload.get("assoc_status")) if tracker_payload.get("assoc_status") is not None else None,
+                "sta_tracker_event_id": str(tracker_payload.get("event_id")) if tracker_payload.get("event_id") is not None else None,
+                "tracker_message_type": tracker_payload.get("message_type"),
+            }
+        )
 
     if event_type == "dns_timeout" and not tracker_payload:
         match = DNS_TIMEOUT_DETAILS_RE.search(message)
@@ -1024,6 +1091,18 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                     "radio": None,
                 }
             )
+    if event_type == "fast_transition_roam_send":
+        match = FAST_TRANSITION_ROAM_SEND_DETAILS_RE.search(message)
+        if match:
+            client_mac = match.group("client_mac").lower()
+            fields.update(
+                {
+                    "ap_mac": match.group("ap_mac").lower(),
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": extract_radio(message),
+                }
+            )
 
     if event_type == "dns_timeout":
         match = WIRELESS_AGG_DNS_TIMEOUT_DETAILS_RE.search(message)
@@ -1038,6 +1117,23 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                     "radio": to_lower_or_none(match.group("radio")),
                     "vap": to_lower_or_none(match.group("vap")),
                     "satisfaction_now": to_int_or_none(match.group("satisfaction_now")),
+                }
+            )
+    if event_type == "wifi_sta_anomaly_report":
+        match = WIRELESS_AGG_STA_ANOMALY_DETAILS_RE.search(message)
+        if match:
+            client_mac = match.group("client_mac").lower()
+            anomalies = match.group("anomalies")
+            fields.update(
+                {
+                    "ap_mac": match.group("bssid").lower(),
+                    "bssid": match.group("bssid").lower(),
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": to_lower_or_none(match.group("radio")),
+                    "vap": to_lower_or_none(match.group("vap")),
+                    "satisfaction_now": to_int_or_none(match.group("satisfaction_now")),
+                    "anomalies": anomalies if anomalies is not None else None,
                 }
             )
 
@@ -1186,6 +1282,17 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                     "radio": match.group("radio").lower(),
                     "idle_seconds": to_int_or_none(match.group("idle_seconds")),
                     "timeout_seconds": to_int_or_none(match.group("timeout_seconds")),
+                }
+            )
+    if event_type == "hostapd_sta_remove":
+        match = HOSTAPD_STA_REMOVE_DETAILS_RE.search(message)
+        if match:
+            client_mac = match.group("client_mac").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": match.group("radio").lower(),
                 }
             )
 

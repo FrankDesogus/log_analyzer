@@ -66,6 +66,7 @@ class ParsedEvent:
     timeout_seconds: Optional[int] = None
     vap: Optional[str] = None
     satisfaction_now: Optional[int] = None
+    anomalies: Optional[str] = None
     auth_failures: Optional[str] = None
     sta_tracker_event_id: Optional[str] = None
     config_key: Optional[str] = None

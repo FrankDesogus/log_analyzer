@@ -32,6 +32,10 @@ FAST_TRANSITION_ROAM_RE = re.compile(
     r"\bWPA:\s*Receive\s+FT:\s*(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\s+STA\s+Roamed:\s*(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b",
     re.IGNORECASE,
 )
+FAST_TRANSITION_ROAM_SEND_RE = re.compile(
+    r"\bWPA:\s*Send\s+FT:\s*RRB\s+UBNT\s+ROAM:\s*STA=(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\s+CurrentAP=(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b",
+    re.IGNORECASE,
+)
 WIFI_SCAN_SANITY_FAILED_RE = re.compile(
     r"\bubnt_get_scan_result:\s*sanity check failed,\s*invalid BssEntry\b",
     re.IGNORECASE,
@@ -66,7 +70,11 @@ PEER_REASSOC_REQ_RE = re.compile(r"\bpeer_reassoc_req\s*:\s*\d+\s*usec\b", re.IG
 QOS_MAP_SUPPORT_RE = re.compile(r"\bentry\s+wcid\s+\d+\s+QosMapSupport=", re.IGNORECASE)
 RRM_NEIGHBOR_REP_RE = re.compile(r"\bRRM_EnqueueNeighborRep\(\)\s*:\s*send Neighbor RSP\b", re.IGNORECASE)
 STATION_IDLE_PROBE_RE = re.compile(
-    r"Send\s+NULL\s+to\s+STA-MAC\s+(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\s+idle\(\d+\)\s+timeout\(\d+\)",
+    r"Send\s+NULL\s+to\s+STA(?:-MAC)?[-\s]+(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\s+idle\(\d+\)\s+timeout\(\d+\)",
+    re.IGNORECASE,
+)
+HOSTAPD_STA_REMOVE_RE = re.compile(
+    r"\bra(?:i|x)?\d+:\s*STA\s+(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\s+WPA:\s*calling\s+hostapd_drv_sta_remove\(\)",
     re.IGNORECASE,
 )
 DRIVER_QUEUE_FLUSH_RE = re.compile(r"\bcb2,\s*flush one!\b", re.IGNORECASE)
@@ -84,8 +92,16 @@ WIRELESS_AGG_DNS_TIMEOUT_RE = re.compile(
     r"\bwireless_agg_stats\.log_sta_anomalies\(\):.*\banomalies\s*=\s*dns_timeout\b",
     re.IGNORECASE,
 )
+WIFI_STA_ANOMALY_REPORT_RE = re.compile(
+    r"\bwireless_agg_stats\.log_sta_anomalies\(\):.*\bbssid=(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}.*\bradio=.*\bvap=.*\bsta=(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}",
+    re.IGNORECASE,
+)
 STA_ASSOC_TRACKER_FAILURE_RE = re.compile(
     r'STA_ASSOC_TRACKER".*?"event_type"\s*:\s*"failure"',
+    re.IGNORECASE,
+)
+STA_ASSOC_TRACKER_ROAM_RE = re.compile(
+    r'STA_ASSOC_TRACKER".*?"event_type"\s*:\s*"sta_roam"',
     re.IGNORECASE,
 )
 ACE_REPORTER_SAVE_CONFIG_RE = re.compile(
@@ -123,10 +139,16 @@ def classify_event_type(message: str) -> Optional[str]:
         return "dns_timeout"
     if FAST_TRANSITION_ROAM_RE.search(message):
         return "fast_transition_roam"
+    if FAST_TRANSITION_ROAM_SEND_RE.search(message):
+        return "fast_transition_roam_send"
     if WIRELESS_AGG_DNS_TIMEOUT_RE.search(message):
         return "dns_timeout"
+    if WIFI_STA_ANOMALY_REPORT_RE.search(message):
+        return "wifi_sta_anomaly_report"
     if STA_ASSOC_TRACKER_FAILURE_RE.search(message):
         return "assoc_tracker_failure"
+    if STA_ASSOC_TRACKER_ROAM_RE.search(message):
+        return "sta_tracker_roam"
     if ACE_REPORTER_SAVE_CONFIG_RE.search(message):
         return "device_config_report"
     if REASSOC_RESPONSE_RE.search(message):
@@ -157,6 +179,8 @@ def classify_event_type(message: str) -> Optional[str]:
         return "rrm_neighbor_response"
     if STATION_IDLE_PROBE_RE.search(message):
         return "station_idle_probe"
+    if HOSTAPD_STA_REMOVE_RE.search(message):
+        return "hostapd_sta_remove"
     if DRIVER_QUEUE_FLUSH_RE.search(message):
         return "driver_queue_flush"
     if DHCP_IP_ASSIGNMENT_RE.search(message):
@@ -236,8 +260,10 @@ def classify_event_category(
         return "wifi_system"
     if event_type in {"reassoc_request", "reassoc_response", "reassoc_processing_time"}:
         return "wifi_roam"
-    if event_type == "fast_transition_roam":
+    if event_type in {"fast_transition_roam", "fast_transition_roam_send", "sta_tracker_roam"}:
         return "wifi_roam"
+    if event_type == "wifi_sta_anomaly_report":
+        return "wifi_quality"
     if event_type == "assoc_tracker_failure":
         return "wifi_association"
     if event_type == "device_config_report":
@@ -253,6 +279,7 @@ def classify_event_category(
         "cfg80211_station_delete",
         "deauth_sent",
         "radius_entry_delete",
+        "hostapd_sta_remove",
     }:
         return "wifi_disconnect"
     if event_type == "system_cache_drop":
@@ -270,7 +297,7 @@ def classify_event_category(
     if event_type == "rrm_neighbor_response":
         return "wifi_rrm"
     if event_type == "station_idle_probe":
-        return "wifi_keepalive"
+        return "wifi_disconnect"
     if event_type == "dhcp_ip_assignment":
         return "network_dhcp"
     if event_type in {"network_link_up", "network_link_down"}:

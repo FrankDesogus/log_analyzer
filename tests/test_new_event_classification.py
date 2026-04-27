@@ -240,6 +240,60 @@ class NewEventClassificationTests(unittest.TestCase):
         self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
         self.assertEqual(event.mac, "76:27:03:0e:78:15")
 
+    def test_fast_transition_roam_send(self) -> None:
+        event = self._parse_message(
+            "WPA: Send FT: RRB UBNT ROAM: STA=76:27:03:0e:78:15 CurrentAP=0e:ea:14:a0:22:a7"
+        )
+        self.assertEqual(event.event_type, "fast_transition_roam_send")
+        self.assertEqual(event.event_category, "wifi_roam")
+        self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(event.ap_mac, "0e:ea:14:a0:22:a7")
+
+    def test_hostapd_sta_remove(self) -> None:
+        event = self._parse_message(
+            "rai2: STA 76:27:03:0e:78:15 WPA: calling hostapd_drv_sta_remove(), ../src/ap/sta_info.c:ap_free_sta:183"
+        )
+        self.assertEqual(event.event_type, "hostapd_sta_remove")
+        self.assertEqual(event.event_category, "wifi_disconnect")
+        self.assertEqual(event.radio, "rai2")
+        self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
+
+    def test_station_idle_probe_sta_dash_format(self) -> None:
+        event = self._parse_message(
+            "[772916.700301] rai2: Send NULL to STA-76:27:03:0e:78:15 idle(60) timeout(480)"
+        )
+        self.assertEqual(event.event_type, "station_idle_probe")
+        self.assertEqual(event.event_category, "wifi_disconnect")
+        self.assertEqual(event.internal_event_ts, "772916.700301")
+        self.assertEqual(event.radio, "rai2")
+        self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(event.idle_seconds, 60)
+        self.assertEqual(event.timeout_seconds, 480)
+
+    def test_wifi_sta_anomaly_report(self) -> None:
+        event = self._parse_message(
+            "mcad[3901]: wireless_agg_stats.log_sta_anomalies(): bssid=0e:ea:14:af:a1:59 radio=rai0 vap=rai2 sta=ac:f2:3c:00:18:b5 satisfaction_now=60 anomalies="
+        )
+        self.assertEqual(event.event_type, "wifi_sta_anomaly_report")
+        self.assertEqual(event.event_category, "wifi_quality")
+        self.assertEqual(event.ap_mac, "0e:ea:14:af:a1:59")
+        self.assertEqual(event.radio, "rai0")
+        self.assertEqual(event.vap, "rai2")
+        self.assertEqual(event.client_mac, "ac:f2:3c:00:18:b5")
+        self.assertEqual(event.satisfaction_now, 60)
+        self.assertEqual(event.anomalies, "")
+
+    def test_sta_tracker_roam(self) -> None:
+        event = self._parse_message(
+            'stahtd[3887]: [STA-TRACKER].stahtd_dump_event(): {"message_type":"STA_ASSOC_TRACKER","mac":"ac:f2:3c:00:18:b5","vap":"rai2","event_type":"sta_roam","assoc_status":"0","event_id":"5"}'
+        )
+        self.assertEqual(event.event_type, "sta_tracker_roam")
+        self.assertEqual(event.event_category, "wifi_roam")
+        self.assertEqual(event.client_mac, "ac:f2:3c:00:18:b5")
+        self.assertEqual(event.radio, "rai2")
+        self.assertEqual(event.assoc_status, "0")
+        self.assertEqual(event.sta_tracker_event_id, "5")
+
     def test_sta_assoc_tracker_failure(self) -> None:
         event = self._parse_message(
             'stahtd[3888]: [STA-TRACKER].stahtd_dump_event(): {"message_type":"STA_ASSOC_TRACKER","mac":"c4:82:e1:71:52:e0","vap":"ra0","event_type":"failure","assoc_status":"0","auth_failures":"18","event_id":"167","auth_ts":"772859.997409"}'
