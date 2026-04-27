@@ -4,7 +4,7 @@ from typing import Optional
 
 MAC_REGEX = r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})"
 RSSI_RE = re.compile(r"rssi=(-?\d+)")
-RADIO_RE = re.compile(r"\b(ra\d+)\b")
+RADIO_RE = re.compile(r"\b(rai?\d+)\b", re.IGNORECASE)
 TA_RE = re.compile(r"\bTA:\[([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\]")
 RA_RE = re.compile(r"\bRA:\[([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\]")
 RECV_AUTH_REQ_RE = re.compile(r"\[recv\s+auth_req\]", re.IGNORECASE)
@@ -59,7 +59,7 @@ def extract_rssi(message: str) -> Optional[int]:
 def extract_radio(message: str) -> Optional[str]:
     match = RADIO_RE.search(message)
     if match:
-        return match.group(1)
+        return match.group(1).lower()
     return None
 
 

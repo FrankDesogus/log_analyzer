@@ -30,6 +30,22 @@ DROP_CACHES_RE = re.compile(r"\bdrop_caches:\s*\d+\b", re.IGNORECASE)
 CFG80211_STA_DEL_START_RE = re.compile(r"CFG80211_OpsStaDel\s*==>", re.IGNORECASE)
 CFG80211_STA_DEL_END_RE = re.compile(r"CFG80211_OpsStaDel\s*<==", re.IGNORECASE)
 EAP_PACKET_RE = re.compile(r"\bRTMPCheckEtherType\(\)\s*==>\s*EAP Packet\b", re.IGNORECASE)
+STA_ASSOC_TRACKER_DNS_TIMEOUT_RE = re.compile(
+    r'STA_ASSOC_TRACKER".*?"event_type"\s*:\s*"dns timeout"',
+    re.IGNORECASE,
+)
+REASSOC_REQ_RE = re.compile(r"\[recv\s+reassoc_req\]", re.IGNORECASE)
+CFG80211_ASSOC_REQ_HANDLER_RE = re.compile(r"\bCFG80211_AssocReqHandler\b", re.IGNORECASE)
+EAPOL_PACKET_RE = re.compile(r"\brt28xx_send_packets\s+Send\s+EAPOL\s+of\s+length\s+\d+", re.IGNORECASE)
+EAPOL_KEY_RE = re.compile(r"\b(?:Send|Recv)\s+EAPOL-Key\s+M[1-4]\b", re.IGNORECASE)
+WIFI_KEY_ADD_STA_RE = re.compile(r"\bKeyAdd\s+STA\(", re.IGNORECASE)
+WIFI_KEY_DEL_STA_RE = re.compile(r"\bKeyDel\s+STA\(", re.IGNORECASE)
+WIFI_AP_KEY_ADD_RE = re.compile(r"\bAP\s+Key\s+Add\b", re.IGNORECASE)
+DELETE_STA_RE = re.compile(r"\bDelete\s+STA\(", re.IGNORECASE)
+CFG80211_AP_STA_DEL_RE = re.compile(r"\bCFG80211_ApStaDel\b.*\bSTA_DEL\b", re.IGNORECASE)
+SEND_DEAUTH_RE = re.compile(r"\[send\s+deauth\]", re.IGNORECASE)
+RADIUS_ENTRY_DEL_RE = re.compile(r"\bradius\s+entry\[\d+\]\s+DEL\s+\(", re.IGNORECASE)
+DRIVER_MISSING_STATION_ENTRY_RE = re.compile(r"Can't find pEntry in ", re.IGNORECASE)
 
 
 def classify_event_type(message: str) -> Optional[str]:
@@ -44,6 +60,32 @@ def classify_event_type(message: str) -> Optional[str]:
         return "auth_response"
     if DNS_TIMEOUT_RE.search(message):
         return "dns_timeout"
+    if STA_ASSOC_TRACKER_DNS_TIMEOUT_RE.search(message):
+        return "dns_timeout"
+    if REASSOC_REQ_RE.search(message):
+        return "reassoc_request"
+    if CFG80211_ASSOC_REQ_HANDLER_RE.search(message):
+        return "cfg80211_assoc_request_handler"
+    if EAPOL_KEY_RE.search(message):
+        return "eapol_key"
+    if EAPOL_PACKET_RE.search(message):
+        return "eapol_packet"
+    if WIFI_KEY_ADD_STA_RE.search(message):
+        return "wifi_key_add"
+    if WIFI_KEY_DEL_STA_RE.search(message):
+        return "wifi_key_delete"
+    if WIFI_AP_KEY_ADD_RE.search(message):
+        return "wifi_ap_key_add"
+    if DELETE_STA_RE.search(message):
+        return "station_delete"
+    if CFG80211_AP_STA_DEL_RE.search(message):
+        return "cfg80211_station_delete"
+    if SEND_DEAUTH_RE.search(message):
+        return "deauth_sent"
+    if RADIUS_ENTRY_DEL_RE.search(message):
+        return "radius_entry_delete"
+    if DRIVER_MISSING_STATION_ENTRY_RE.search(message):
+        return "driver_missing_station_entry"
     if WIFI_SCAN_SANITY_FAILED_RE.search(message):
         return "wifi_scan_error"
     if DROP_CACHES_RE.search(message):
@@ -69,6 +111,21 @@ def classify_event_category(
         return "network_dns"
     if event_type == "wifi_scan_error":
         return "wifi_system"
+    if event_type in {"reassoc_request"}:
+        return "wifi_roam"
+    if event_type in {"cfg80211_assoc_request_handler", "driver_missing_station_entry"}:
+        return "wifi_driver"
+    if event_type in {"eapol_packet", "eapol_key"}:
+        return "wifi_eapol"
+    if event_type in {"wifi_key_add", "wifi_key_delete", "wifi_ap_key_add"}:
+        return "wifi_security"
+    if event_type in {
+        "station_delete",
+        "cfg80211_station_delete",
+        "deauth_sent",
+        "radius_entry_delete",
+    }:
+        return "wifi_disconnect"
     if event_type == "system_cache_drop":
         return "system_maintenance"
     if event_type in {"cfg80211_station_delete_start", "cfg80211_station_delete_end"}:
