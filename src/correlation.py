@@ -216,7 +216,11 @@ def _cluster_to_canonical_event(cluster: _ClusterState, canonical_index: int) ->
 
     return {
         "canonical_event_id": _build_canonical_event_id(cluster, canonical_index),
-        "canonical_event_type": _derive_canonical_event_type(cluster.event_types),
+        "canonical_event_type": _derive_canonical_event_type(
+            cluster.event_types,
+            event_categories=cluster.event_categories,
+            process_names=cluster.process_names,
+        ),
         "correlation_strategy": CORRELATION_STRATEGY,
         "source_ip": cluster.source_ip,
         "host": cluster.host,
@@ -253,23 +257,67 @@ def _build_canonical_event_id(cluster: _ClusterState, canonical_index: int) -> s
     return f"canon-{source_ip}-{client_mac}-{radio}-{first_ts}"
 
 
-def _derive_canonical_event_type(event_types: set[str]) -> str:
+def _derive_canonical_event_type(
+    event_types: set[str],
+    event_categories: Optional[set[str]] = None,
+    process_names: Optional[set[str]] = None,
+) -> str:
     if not event_types:
+        return "wifi_unknown_sequence"
+
+    known_event_types = {event_type for event_type in event_types if event_type != "unknown"}
+    if not known_event_types:
         return "wifi_unknown_sequence"
 
     has_auth = "auth_request" in event_types or "auth_response" in event_types
     has_disconnect = "disconnect" in event_types
-    has_eapol_key = any(event_type == "eapol_key" for event_type in event_types)
-    has_assoc_flow = any(event_type in {"station_join", "assoc_success", "reassoc_response"} for event_type in event_types)
+    has_eapol_flow = any(event_type in {"eapol_key", "eapol_packet", "eap_packet"} for event_type in event_types)
+    has_assoc_flow = any(
+        event_type
+        in {
+            "station_join",
+            "assoc_success",
+            "reassoc_request",
+            "reassoc_response",
+            "station_table_insert",
+            "cfg80211_assoc_request_handler",
+            "station_qos_map_support",
+        }
+        for event_type in event_types
+    )
     has_assoc_failure = "assoc_tracker_failure" in event_types
     has_roam_flow = any(
-        event_type in {"reassoc_request", "reassoc_response", "assoc_success", "reassoc_processing_time", "fast_transition_roam"}
+        event_type
+        in {
+            "reassoc_request",
+            "reassoc_response",
+            "assoc_success",
+            "reassoc_processing_time",
+            "fast_transition_roam",
+            "rrm_neighbor_response",
+        }
         for event_type in event_types
     )
     has_dns_anomaly = "dns_timeout" in event_types
     has_device_mgmt_report = "device_config_report" in event_types
+    has_wifi_scan_error = "wifi_scan_error" in event_types
+    has_system_maintenance = "system_cache_drop" in event_types
+    process_names_normalized = {name.lower() for name in (process_names or set())}
+    has_device_mgmt_process = bool({"mcad", "syswrapper", "logread", "procd"} & process_names_normalized)
+    has_device_mgmt_category = bool({"device_management", "controller_config"} & set(event_categories or set()))
     has_disconnect_flow = any(
-        event_type in {"station_delete", "cfg80211_station_delete", "deauth_sent", "wifi_key_delete", "disconnect"}
+        event_type
+        in {
+            "station_delete",
+            "cfg80211_station_delete",
+            "cfg80211_station_delete_start",
+            "cfg80211_station_delete_end",
+            "station_table_delete",
+            "driver_missing_station_entry",
+            "deauth_sent",
+            "wifi_key_delete",
+            "disconnect",
+        }
         for event_type in event_types
     )
 
@@ -277,18 +325,22 @@ def _derive_canonical_event_type(event_types: set[str]) -> str:
         return "wifi_auth_disconnect_sequence"
     if has_auth and has_disconnect_flow:
         return "wifi_auth_disconnect_sequence"
+    if has_eapol_flow:
+        return "wifi_eapol_handshake_sequence"
+    if has_system_maintenance:
+        return "system_maintenance_sequence"
+    if has_wifi_scan_error:
+        return "wifi_system_sequence"
+    if has_device_mgmt_report or has_device_mgmt_process or has_device_mgmt_category:
+        return "device_management_sequence"
     if has_assoc_failure and (has_auth or has_disconnect or has_disconnect_flow):
         return "wifi_auth_disconnect_sequence"
     if has_assoc_failure:
         return "wifi_assoc_failure_sequence"
-    if has_eapol_key:
-        return "wifi_eapol_handshake_sequence"
     if has_roam_flow:
         return "wifi_roam_sequence"
     if has_dns_anomaly:
         return "network_dns_anomaly_sequence"
-    if has_device_mgmt_report:
-        return "device_management_sequence"
     if has_assoc_flow:
         return "wifi_association_sequence"
     if has_auth and not has_disconnect:
