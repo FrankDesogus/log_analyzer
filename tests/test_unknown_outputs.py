@@ -37,6 +37,9 @@ class UnknownOutputsTests(unittest.TestCase):
         self.assertEqual(report["canonical_sequences_with_large_timestamp_gap"], 1)
         self.assertEqual(report["max_raw_line_gap_in_canonical_sequence"], 890)
         self.assertEqual(report["max_timestamp_gap_seconds_in_canonical_sequence"], 8.0)
+        self.assertEqual(report["max_consecutive_line_gap"], 890)
+        self.assertEqual(report["max_consecutive_timestamp_gap_seconds"], 8.0)
+        self.assertIn("wifi_unknown_sequence", report["suspicious_sequences_by_type"])
         self.assertGreaterEqual(len(report["suspicious_canonical_sequences_sample"]), 1)
 
     def test_unknown_outputs_are_generated(self) -> None:
