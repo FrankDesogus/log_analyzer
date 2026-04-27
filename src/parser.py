@@ -35,6 +35,30 @@ INTERNAL_EVENT_TS_RE = re.compile(r"\[(\d+\.\d+)\]")
 # Configurabile per adattare il raggruppamento fine a burst quasi-identici
 # entro finestre temporali molto strette.
 FINE_DUPLICATE_BUCKET_MS = 10
+UNKNOWN_EVENT_FIELDS = [
+    "line_number",
+    "source_ip",
+    "timestamp",
+    "normalized_timestamp",
+    "host",
+    "facility",
+    "severity",
+    "process",
+    "process_name",
+    "raw_message",
+    "raw_line",
+    "event_type",
+    "event_category",
+    "client_mac",
+    "radio",
+    "internal_event_ts",
+    "duplicate_group_key",
+    "fine_duplicate_group_key",
+]
+MAC_PATTERN_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b")
+IP_PATTERN_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+KERNEL_TS_PATTERN_RE = re.compile(r"\[\d+\.\d+\]")
+LONG_NUM_PATTERN_RE = re.compile(r"\b\d{4,}\b")
 
 
 def parse_line(line: str) -> Optional[ParsedEvent]:
@@ -91,6 +115,8 @@ def parse_file(
     output_path: Path,
     canonical_output_path: Optional[Path] = None,
     parser_report_output_path: Optional[Path] = None,
+    unknown_events_output_path: Optional[Path] = None,
+    unknown_summary_output_path: Optional[Path] = None,
     include_raw_in_canonical_output: bool = False,
 ) -> None:
     parsed_events = parse_file_to_events(input_path)
@@ -100,6 +126,18 @@ def parse_file(
 
     print(f"Lette {len(parsed_events)} righe.")
     print(f"Output raw scritto in: {output_path}")
+
+    unknown_events = extract_unknown_events(parsed_events)
+    if unknown_events_output_path is not None:
+        with unknown_events_output_path.open("w", encoding="utf-8") as file_out:
+            json.dump(unknown_events, file_out, indent=2, ensure_ascii=False)
+        print(f"Unknown events scritti in: {unknown_events_output_path}")
+
+    unknown_summary = build_unknown_summary(unknown_events)
+    if unknown_summary_output_path is not None:
+        with unknown_summary_output_path.open("w", encoding="utf-8") as file_out:
+            json.dump(unknown_summary, file_out, indent=2, ensure_ascii=False)
+        print(f"Unknown summary scritto in: {unknown_summary_output_path}")
 
     if canonical_output_path is None:
         return
@@ -118,7 +156,15 @@ def parse_file(
     print(f"Output canonico scritto in: {canonical_output_path}")
 
     if parser_report_output_path is not None:
-        parser_report = build_parser_report(parsed_events, correlated_payload["canonical_events"])
+        parser_report = build_parser_report(
+            parsed_events,
+            correlated_payload["canonical_events"],
+            unknown_events,
+            output_path,
+            canonical_output_path,
+            unknown_events_output_path,
+            unknown_summary_output_path,
+        )
         with parser_report_output_path.open("w", encoding="utf-8") as file_out:
             json.dump(parser_report, file_out, indent=2, ensure_ascii=False)
         print(f"Report parser scritto in: {parser_report_output_path}")
@@ -136,7 +182,15 @@ def parse_file_with_canonical_events(input_path: Path, output_path: Path) -> Non
     print(f"Output scritto in: {output_path}")
 
 
-def build_parser_report(parsed_events: list[dict[str, Any]], canonical_events: list[dict[str, Any]]) -> dict[str, Any]:
+def build_parser_report(
+    parsed_events: list[dict[str, Any]],
+    canonical_events: list[dict[str, Any]],
+    unknown_events: list[dict[str, Any]],
+    parsed_output_path: Path,
+    canonical_output_path: Optional[Path] = None,
+    unknown_events_output_path: Optional[Path] = None,
+    unknown_summary_output_path: Optional[Path] = None,
+) -> dict[str, Any]:
     parse_status_counts = Counter((event.get("parse_status") or "unknown") for event in parsed_events)
     event_type_counts = Counter((event.get("event_type") or "unknown") for event in parsed_events)
     canonical_event_type_counts = Counter(
@@ -165,6 +219,13 @@ def build_parser_report(parsed_events: list[dict[str, Any]], canonical_events: l
             ),
         },
         "unknown_event_count": event_type_counts.get("unknown", 0),
+        "unknown_events_exported_count": len(unknown_events),
+        "generated_files": {
+            "parsed_events": str(parsed_output_path),
+            "canonical_events": str(canonical_output_path) if canonical_output_path is not None else None,
+            "unknown_events": str(unknown_events_output_path) if unknown_events_output_path is not None else None,
+            "unknown_summary": str(unknown_summary_output_path) if unknown_summary_output_path is not None else None,
+        },
         "events_without_client_mac": sum(1 for event in parsed_events if not event.get("client_mac")),
         "events_without_radio": sum(1 for event in parsed_events if not event.get("radio")),
         "top_client_mac_by_event_count": [
@@ -174,6 +235,107 @@ def build_parser_report(parsed_events: list[dict[str, Any]], canonical_events: l
             {"source_ip": key, "event_count": count} for key, count in source_ip_counts.most_common(10)
         ],
     }
+
+
+def extract_unknown_events(parsed_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unknown_events: list[dict[str, Any]] = []
+    for event in parsed_events:
+        event_type_is_unknown = event.get("event_type") == "unknown"
+        is_system_without_mac = (
+            event.get("event_category") == "system_event"
+            and event.get("client_mac") is None
+        )
+        if not (event_type_is_unknown or is_system_without_mac):
+            continue
+        unknown_events.append({field: event.get(field) for field in UNKNOWN_EVENT_FIELDS})
+    return unknown_events
+
+
+def build_unknown_summary(unknown_events: list[dict[str, Any]]) -> dict[str, Any]:
+    count_by_source_ip = Counter((event.get("source_ip") or "unknown") for event in unknown_events)
+    count_by_host = Counter((event.get("host") or "unknown") for event in unknown_events)
+    count_by_facility = Counter((event.get("facility") or "unknown") for event in unknown_events)
+    count_by_severity = Counter((event.get("severity") or "unknown") for event in unknown_events)
+    count_by_process_name = Counter((event.get("process_name") or "unknown") for event in unknown_events)
+    count_by_event_category = Counter((event.get("event_category") or "unknown") for event in unknown_events)
+
+    pattern_to_events: dict[str, list[dict[str, Any]]] = {}
+    for event in unknown_events:
+        raw_message = event.get("raw_message") or ""
+        normalized_pattern = normalize_unknown_message_pattern(raw_message)
+        pattern_to_events.setdefault(normalized_pattern, []).append(event)
+
+    sorted_patterns = sorted(pattern_to_events.items(), key=lambda item: len(item[1]), reverse=True)
+    top_raw_message_patterns = []
+    for pattern, pattern_events in sorted_patterns[:20]:
+        top_raw_message_patterns.append(
+            {
+                "pattern": pattern,
+                "count": len(pattern_events),
+                "sample_raw_message": pattern_events[0].get("raw_message"),
+                "sample_line_numbers": [event.get("line_number") for event in pattern_events[:5]],
+            }
+        )
+
+    sample_unknown_events = select_representative_unknown_samples(sorted_patterns, max_samples=50)
+
+    return {
+        "total_unknown_events": len(unknown_events),
+        "count_by_source_ip": dict(count_by_source_ip),
+        "count_by_host": dict(count_by_host),
+        "count_by_facility": dict(count_by_facility),
+        "count_by_severity": dict(count_by_severity),
+        "count_by_process_name": dict(count_by_process_name),
+        "count_by_event_category": dict(count_by_event_category),
+        "top_raw_message_patterns": top_raw_message_patterns,
+        "sample_unknown_events": sample_unknown_events,
+    }
+
+
+def normalize_unknown_message_pattern(raw_message: str) -> str:
+    normalized = raw_message
+    normalized = MAC_PATTERN_RE.sub("<MAC>", normalized)
+    normalized = IP_PATTERN_RE.sub("<IP>", normalized)
+    normalized = KERNEL_TS_PATTERN_RE.sub("[<KERNEL_TS>]", normalized)
+    normalized = LONG_NUM_PATTERN_RE.sub("<NUM>", normalized)
+    return normalized
+
+
+def select_representative_unknown_samples(
+    sorted_patterns: list[tuple[str, list[dict[str, Any]]]],
+    max_samples: int,
+) -> list[dict[str, Any]]:
+    if max_samples <= 0:
+        return []
+
+    samples: list[dict[str, Any]] = []
+    pattern_indexes = [0] * len(sorted_patterns)
+    seen_line_numbers: set[int] = set()
+
+    while len(samples) < max_samples:
+        added_this_round = False
+        for pattern_idx, (_, pattern_events) in enumerate(sorted_patterns):
+            current_index = pattern_indexes[pattern_idx]
+            if current_index >= len(pattern_events):
+                continue
+
+            event = pattern_events[current_index]
+            pattern_indexes[pattern_idx] += 1
+            line_number = event.get("line_number")
+            if line_number is not None and line_number in seen_line_numbers:
+                continue
+
+            if line_number is not None:
+                seen_line_numbers.add(line_number)
+            samples.append(event)
+            added_this_round = True
+            if len(samples) >= max_samples:
+                break
+
+        if not added_this_round:
+            break
+
+    return samples
 
 
 def parse_file_to_events(input_path: Path) -> list[dict]:
