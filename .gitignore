@@ -3,12 +3,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Virtual env
+# Virtual environment
 .venv/
 venv/
 
-# Log / raw data / output
-data/raw/
+# Data / logs / generated outputs
+data/
+output/
 *.log
 parser_report.json
 unknown_events.json
@@ -17,3 +18,7 @@ unknown_summary.json
 # IDE
 .idea/
 .vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
