@@ -70,6 +70,10 @@ class ParsedEvent:
     sta_tracker_event_id: Optional[str] = None
     config_key: Optional[str] = None
     config_value: Optional[str] = None
+    client_ip: Optional[str] = None
+    interface: Optional[str] = None
+    port: Optional[int] = None
+    link_state: Optional[str] = None
     fine_duplicate_group_key: Optional[str] = None
     fine_duplicate_group_size: int = 1
     is_fine_duplicate_candidate: bool = False
