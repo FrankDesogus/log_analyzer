@@ -6,7 +6,20 @@ from typing import Any, Optional
 
 
 DEFAULT_MAX_GAP_MS = 15
+DEFAULT_MAX_CONSECUTIVE_TIMESTAMP_GAP_SECONDS = 3.0
+DEFAULT_MAX_CONSECUTIVE_RAW_LINE_GAP = 120
+DEFAULT_MAX_ASSOC_FAILURE_ATTACH_GAP_SECONDS = 0.75
+DEFAULT_MAX_ASSOC_FAILURE_ATTACH_LINE_GAP = 30
 CORRELATION_STRATEGY = "source_ip+client_mac+radio_or_fallback+internal_event_ts_window"
+
+
+@dataclass(frozen=True)
+class CorrelationConfig:
+    max_consecutive_internal_gap_ms: int = DEFAULT_MAX_GAP_MS
+    max_consecutive_timestamp_gap_seconds: float = DEFAULT_MAX_CONSECUTIVE_TIMESTAMP_GAP_SECONDS
+    max_consecutive_raw_line_gap: int = DEFAULT_MAX_CONSECUTIVE_RAW_LINE_GAP
+    max_assoc_failure_attach_gap_seconds: float = DEFAULT_MAX_ASSOC_FAILURE_ATTACH_GAP_SECONDS
+    max_assoc_failure_attach_line_gap: int = DEFAULT_MAX_ASSOC_FAILURE_ATTACH_LINE_GAP
 
 
 @dataclass
@@ -28,14 +41,23 @@ class _ClusterState:
     last_internal_event_ts: Optional[float] = None
     first_sort_ts: Optional[float] = None
     last_sort_ts: Optional[float] = None
+    last_line_number: Optional[int] = None
+    last_event_type: Optional[str] = None
     rssi_values: list[int] = field(default_factory=list)
+    raw_index_to_line_number: dict[int, int] = field(default_factory=dict)
 
 
-def build_canonical_events(events: list[dict[str, Any]], max_gap_ms: int = DEFAULT_MAX_GAP_MS) -> dict[str, list[dict[str, Any]]]:
+def build_canonical_events(
+    events: list[dict[str, Any]],
+    max_gap_ms: int = DEFAULT_MAX_GAP_MS,
+    correlation_config: Optional[CorrelationConfig] = None,
+) -> dict[str, list[dict[str, Any]]]:
     """Build canonical SIEM-like WiFi sequences from normalized raw events.
 
     Raw events are kept untouched and returned as-is in `raw_events`.
     """
+    config = correlation_config or CorrelationConfig(max_consecutive_internal_gap_ms=max_gap_ms)
+
     identity_groups: dict[tuple[str, str, str], list[tuple[int, dict[str, Any]]]] = {}
 
     for raw_index, event in enumerate(events):
@@ -45,7 +67,7 @@ def build_canonical_events(events: list[dict[str, Any]], max_gap_ms: int = DEFAU
     clusters: list[_ClusterState] = []
     for group_events in identity_groups.values():
         sorted_group = sorted(group_events, key=lambda item: _event_sort_key(item[0], item[1]))
-        clusters.extend(_build_group_clusters(sorted_group, max_gap_ms=max_gap_ms))
+        clusters.extend(_build_group_clusters(sorted_group, config=config))
 
     clusters.sort(key=lambda cluster: _cluster_sort_key(cluster))
 
@@ -92,7 +114,7 @@ def _event_sort_ts(event: dict[str, Any]) -> Optional[float]:
 
 def _build_group_clusters(
     sorted_group_events: list[tuple[int, dict[str, Any]]],
-    max_gap_ms: int,
+    config: CorrelationConfig,
 ) -> list[_ClusterState]:
     clusters: list[_ClusterState] = []
     active_cluster: Optional[_ClusterState] = None
@@ -102,7 +124,7 @@ def _build_group_clusters(
             active_cluster = _new_cluster(raw_index, event)
             continue
 
-        if _can_attach_to_cluster(active_cluster, event, max_gap_ms=max_gap_ms):
+        if _can_attach_to_cluster(active_cluster, event, config=config):
             _add_event_to_cluster(active_cluster, raw_index, event)
             continue
 
@@ -115,27 +137,41 @@ def _build_group_clusters(
     return clusters
 
 
-def _can_attach_to_cluster(cluster: _ClusterState, event: dict[str, Any], max_gap_ms: int) -> bool:
+def _can_attach_to_cluster(cluster: _ClusterState, event: dict[str, Any], config: CorrelationConfig) -> bool:
     cluster_last_ts = cluster.last_sort_ts
     event_ts = _event_sort_ts(event)
+    event_line_number = _to_int_or_none(event.get("line_number"))
+    line_gap = _line_gap(cluster.last_line_number, event_line_number)
+
+    if line_gap is not None and line_gap > config.max_consecutive_raw_line_gap:
+        return False
 
     # Nessun riferimento temporale affidabile: separazione prudente.
     if cluster_last_ts is None or event_ts is None:
         return False
 
     gap_seconds = abs(event_ts - cluster_last_ts)
-    if gap_seconds * 1000 <= max_gap_ms:
-        return True
+    cluster_last_internal_ts = cluster.last_internal_event_ts
+    event_internal_ts = _to_float_or_none(event.get("internal_event_ts_float"))
 
-    # Fallback prudente quando manca internal_event_ts_float sul nuovo evento:
-    # consenti accorpamento solo in caso di allineamento quasi perfetto sul timestamp normalizzato.
-    if event.get("internal_event_ts_float") is None:
-        cluster_norm = cluster.first_normalized_timestamp
-        event_norm = event.get("normalized_timestamp")
-        if cluster_norm and event_norm and cluster_norm == event_norm and gap_seconds <= 0.001:
+    if cluster_last_internal_ts is not None and event_internal_ts is not None:
+        if abs(event_internal_ts - cluster_last_internal_ts) * 1000 <= config.max_consecutive_internal_gap_ms:
             return True
+        return False
 
-    return False
+    if gap_seconds > config.max_consecutive_timestamp_gap_seconds:
+        return False
+
+    if _is_assoc_failure_far_from_auth_disconnect(
+        cluster,
+        event,
+        gap_seconds=gap_seconds,
+        line_gap=line_gap,
+        config=config,
+    ):
+        return False
+
+    return True
 
 
 def _new_cluster(raw_index: int, event: dict[str, Any]) -> _ClusterState:
@@ -153,7 +189,12 @@ def _add_event_to_cluster(cluster: _ClusterState, raw_index: int, event: dict[st
 
     line_number = event.get("line_number")
     if line_number is not None:
-        cluster.raw_line_numbers.append(int(line_number))
+        line_number_int = int(line_number)
+        cluster.raw_line_numbers.append(line_number_int)
+        cluster.last_line_number = line_number_int
+        cluster.raw_index_to_line_number[raw_index] = line_number_int
+    else:
+        cluster.last_line_number = None
 
     if cluster.host is None and event.get("host") is not None:
         cluster.host = event.get("host")
@@ -163,6 +204,7 @@ def _add_event_to_cluster(cluster: _ClusterState, raw_index: int, event: dict[st
     event_type = event.get("event_type")
     if event_type:
         event_type_str = str(event_type)
+        cluster.last_event_type = event_type_str
         cluster.event_types.add(event_type_str)
         cluster.event_type_counts[event_type_str] = cluster.event_type_counts.get(event_type_str, 0) + 1
 
@@ -214,6 +256,13 @@ def _cluster_to_canonical_event(cluster: _ClusterState, canonical_index: int) ->
     event_types_seen = sorted(cluster.event_types)
     sequence_summary = _build_sequence_summary(cluster)
 
+    ordered_raw_indexes = sorted(cluster.raw_indexes, key=lambda idx: _raw_index_output_sort_key(cluster, idx))
+    ordered_raw_line_numbers = [
+        cluster.raw_index_to_line_number[idx]
+        for idx in ordered_raw_indexes
+        if idx in cluster.raw_index_to_line_number
+    ]
+
     return {
         "canonical_event_id": _build_canonical_event_id(cluster, canonical_index),
         "canonical_event_type": _derive_canonical_event_type(
@@ -232,14 +281,51 @@ def _cluster_to_canonical_event(cluster: _ClusterState, canonical_index: int) ->
         "last_internal_event_ts": cluster.last_internal_event_ts,
         "duration_ms": duration_ms,
         "raw_event_count": len(cluster.raw_indexes),
-        "raw_line_numbers": sorted(cluster.raw_line_numbers),
-        "raw_event_indexes": cluster.raw_indexes,
+        "raw_line_numbers": ordered_raw_line_numbers,
+        "raw_event_indexes": ordered_raw_indexes,
         "event_types_seen": event_types_seen,
         "event_categories_seen": sorted(cluster.event_categories),
         "process_names_seen": sorted(cluster.process_names),
         "sources_seen": sorted(cluster.sources_seen),
         "sequence_summary": sequence_summary,
     }
+
+
+def _raw_index_output_sort_key(cluster: _ClusterState, raw_index: int) -> tuple[int, int]:
+    line_number = cluster.raw_index_to_line_number.get(raw_index)
+    if line_number is None:
+        return (10**12, raw_index)
+    return (line_number, raw_index)
+
+
+def _line_gap(previous: Optional[int], current: Optional[int]) -> Optional[int]:
+    if previous is None or current is None:
+        return None
+    return abs(current - previous)
+
+
+def _is_assoc_failure_far_from_auth_disconnect(
+    cluster: _ClusterState,
+    event: dict[str, Any],
+    gap_seconds: float,
+    line_gap: Optional[int],
+    config: CorrelationConfig,
+) -> bool:
+    event_type = str(event.get("event_type") or "")
+    if event_type != "assoc_tracker_failure":
+        return False
+
+    has_auth_or_disconnect = bool(
+        {"auth_request", "auth_response", "disconnect"} & cluster.event_types
+    )
+    if not has_auth_or_disconnect:
+        return False
+
+    if gap_seconds > config.max_assoc_failure_attach_gap_seconds:
+        return True
+    if line_gap is not None and line_gap > config.max_assoc_failure_attach_line_gap:
+        return True
+    return False
 
 
 def _build_canonical_event_id(cluster: _ClusterState, canonical_index: int) -> str:

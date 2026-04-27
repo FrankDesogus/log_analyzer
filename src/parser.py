@@ -591,6 +591,9 @@ def build_parser_report(
         "canonical_sequences_with_large_timestamp_gap": canonical_gap_stats["canonical_sequences_with_large_timestamp_gap"],
         "max_raw_line_gap_in_canonical_sequence": canonical_gap_stats["max_raw_line_gap_in_canonical_sequence"],
         "max_timestamp_gap_seconds_in_canonical_sequence": canonical_gap_stats["max_timestamp_gap_seconds_in_canonical_sequence"],
+        "max_consecutive_line_gap": canonical_gap_stats["max_consecutive_line_gap"],
+        "max_consecutive_timestamp_gap_seconds": canonical_gap_stats["max_consecutive_timestamp_gap_seconds"],
+        "suspicious_sequences_by_type": canonical_gap_stats["suspicious_sequences_by_type"],
         "suspicious_canonical_sequences_sample": canonical_gap_stats["suspicious_canonical_sequences_sample"],
         "unknown_top_patterns": unknown_summary.get("top_patterns", []),
         "unknown_by_source_ip": dict(unknown_by_source_ip),
@@ -682,6 +685,9 @@ def build_quality_report(
         "canonical_sequences_with_large_timestamp_gap": canonical_gap_stats["canonical_sequences_with_large_timestamp_gap"],
         "max_raw_line_gap_in_canonical_sequence": canonical_gap_stats["max_raw_line_gap_in_canonical_sequence"],
         "max_timestamp_gap_seconds_in_canonical_sequence": canonical_gap_stats["max_timestamp_gap_seconds_in_canonical_sequence"],
+        "max_consecutive_line_gap": canonical_gap_stats["max_consecutive_line_gap"],
+        "max_consecutive_timestamp_gap_seconds": canonical_gap_stats["max_consecutive_timestamp_gap_seconds"],
+        "suspicious_sequences_by_type": canonical_gap_stats["suspicious_sequences_by_type"],
         "suspicious_canonical_sequences_sample": canonical_gap_stats["suspicious_canonical_sequences_sample"],
     }
 
@@ -729,12 +735,15 @@ def analyze_canonical_sequence_gaps(
             if isinstance(value, int) or (isinstance(value, str) and value.isdigit())
         ]
         line_gap = 0
+        max_consecutive_line_gap = 0
         if len(raw_line_numbers) > 1:
             sorted_lines = sorted(raw_line_numbers)
-            line_gap = max(
+            consecutive_gaps = [
                 (sorted_lines[idx + 1] - sorted_lines[idx])
                 for idx in range(len(sorted_lines) - 1)
-            )
+            ]
+            line_gap = max(consecutive_gaps)
+            max_consecutive_line_gap = line_gap
         max_line_gap = max(max_line_gap, line_gap)
         has_large_line_gap = line_gap > line_gap_threshold
         if has_large_line_gap:
@@ -750,6 +759,13 @@ def analyze_canonical_sequence_gaps(
             if epoch is not None:
                 timestamps.append(epoch)
         ts_gap = max(timestamps) - min(timestamps) if len(timestamps) > 1 else 0.0
+        max_consecutive_ts_gap = 0.0
+        if len(timestamps) > 1:
+            sorted_ts = sorted(timestamps)
+            max_consecutive_ts_gap = max(
+                (sorted_ts[idx + 1] - sorted_ts[idx])
+                for idx in range(len(sorted_ts) - 1)
+            )
         max_ts_gap = max(max_ts_gap, ts_gap)
         has_large_ts_gap = ts_gap > timestamp_gap_threshold_seconds
         if has_large_ts_gap:
@@ -762,17 +778,26 @@ def analyze_canonical_sequence_gaps(
                     "canonical_event_type": canonical_event.get("canonical_event_type"),
                     "raw_event_count": canonical_event.get("raw_event_count"),
                     "max_line_gap": line_gap,
+                    "max_consecutive_line_gap": max_consecutive_line_gap,
                     "timestamp_gap_seconds": round(ts_gap, 3),
+                    "max_consecutive_timestamp_gap_seconds": round(max_consecutive_ts_gap, 3),
                     "raw_line_numbers": raw_line_numbers[:10],
                     "event_types_seen": canonical_event.get("event_types_seen", []),
                 }
             )
+
+    suspicious_by_type = Counter(
+        (entry.get("canonical_event_type") or "unknown") for entry in suspicious_samples
+    )
 
     return {
         "canonical_sequences_with_large_line_gap": large_line_gap_count,
         "canonical_sequences_with_large_timestamp_gap": large_ts_gap_count,
         "max_raw_line_gap_in_canonical_sequence": max_line_gap,
         "max_timestamp_gap_seconds_in_canonical_sequence": round(max_ts_gap, 3),
+        "max_consecutive_line_gap": max_line_gap,
+        "max_consecutive_timestamp_gap_seconds": round(max_ts_gap, 3),
+        "suspicious_sequences_by_type": dict(suspicious_by_type),
         "suspicious_canonical_sequences_sample": suspicious_samples,
     }
 

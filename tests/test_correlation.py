@@ -387,6 +387,43 @@ class CanonicalCorrelationTests(unittest.TestCase):
         self.assertEqual(canonical["sequence_summary"]["wifi_key_add_count"], 1)
         self.assertEqual(canonical["sequence_summary"]["wifi_ap_key_add_count"], 1)
 
+    def test_assoc_tracker_failure_far_in_time_is_split(self) -> None:
+        payload = build_canonical_events(
+            [
+                {
+                    "line_number": 100,
+                    "source_ip": "10.0.0.99",
+                    "client_mac": "de:ad:be:ef:10:00",
+                    "radio": "ra1",
+                    "event_type": "auth_request",
+                    "event_category": "wifi_auth",
+                    "internal_event_ts_float": 1000.000,
+                },
+                {
+                    "line_number": 101,
+                    "source_ip": "10.0.0.99",
+                    "client_mac": "de:ad:be:ef:10:00",
+                    "radio": "ra1",
+                    "event_type": "disconnect",
+                    "event_category": "wifi_disconnect",
+                    "internal_event_ts_float": 1000.010,
+                },
+                {
+                    "line_number": 400,
+                    "source_ip": "10.0.0.99",
+                    "client_mac": "de:ad:be:ef:10:00",
+                    "radio": "ra1",
+                    "event_type": "assoc_tracker_failure",
+                    "event_category": "wifi_association",
+                    "internal_event_ts_float": 1001.100,
+                },
+            ]
+        )
+        self.assertEqual(len(payload["canonical_events"]), 2)
+        canonical_types = [event["canonical_event_type"] for event in payload["canonical_events"]]
+        self.assertIn("wifi_auth_disconnect_sequence", canonical_types)
+        self.assertIn("wifi_assoc_failure_sequence", canonical_types)
+
 
 if __name__ == "__main__":
     unittest.main()
