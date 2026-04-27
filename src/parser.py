@@ -370,6 +370,7 @@ def parse_file(
     print(f"- unknown summary count: {quality_report['unknown_summary_count']}")
     print(f"- unknown counts consistent: {quality_report['unknown_files_are_consistent']}")
     print(f"- canonical unknown sequences: {quality_report['canonical_unknown_sequences']}")
+    print(f"- wifi security sequences: {quality_report['canonical_wifi_security_sequences']}")
     print(
         "- known event types inside unknown sequences: "
         f"{quality_report['canonical_unknown_sequences_with_known_event_types']}"
@@ -502,6 +503,9 @@ def build_quality_report(
     unknown_sequences = [
         event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_unknown_sequence"
     ]
+    wifi_security_sequences = [
+        event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_security_sequence"
+    ]
     unknown_sequences_with_known_types = []
     known_types_counter: Counter[str] = Counter()
 
@@ -523,6 +527,7 @@ def build_quality_report(
         "parser_report_unknown_count": parser_report_unknown_count,
         "unknown_files_are_consistent": unknown_files_are_consistent,
         "canonical_unknown_sequences": len(unknown_sequences),
+        "canonical_wifi_security_sequences": len(wifi_security_sequences),
         "canonical_unknown_sequences_truly_unknown": len(unknown_sequences) - len(unknown_sequences_with_known_types),
         "canonical_unknown_sequences_with_known_event_types": len(unknown_sequences_with_known_types),
         "known_event_types_inside_unknown_sequences": dict(known_types_counter),

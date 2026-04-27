@@ -278,6 +278,35 @@ class CanonicalCorrelationTests(unittest.TestCase):
             "device_management_sequence",
         )
 
+    def test_wifi_key_events_map_to_wifi_security_sequence(self) -> None:
+        payload = build_canonical_events(
+            [
+                {
+                    "line_number": 90,
+                    "source_ip": "10.0.0.90",
+                    "client_mac": "de:ad:be:ef:00:90",
+                    "radio": "ra1",
+                    "event_type": "wifi_key_add",
+                    "event_category": "wifi_security",
+                    "internal_event_ts_float": 9000.001,
+                },
+                {
+                    "line_number": 91,
+                    "source_ip": "10.0.0.90",
+                    "client_mac": "de:ad:be:ef:00:90",
+                    "radio": "ra1",
+                    "event_type": "wifi_ap_key_add",
+                    "event_category": "wifi_security",
+                    "internal_event_ts_float": 9000.005,
+                },
+            ]
+        )
+        self.assertEqual(len(payload["canonical_events"]), 1)
+        canonical = payload["canonical_events"][0]
+        self.assertEqual(canonical["canonical_event_type"], "wifi_security_sequence")
+        self.assertEqual(canonical["sequence_summary"]["wifi_key_add_count"], 1)
+        self.assertEqual(canonical["sequence_summary"]["wifi_ap_key_add_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
