@@ -230,6 +230,53 @@ class NewEventClassificationTests(unittest.TestCase):
         self.assertEqual(idle_evt.idle_seconds, 300)
         self.assertEqual(idle_evt.timeout_seconds, 5)
 
+    def test_fast_transition_roam(self) -> None:
+        event = self._parse_message(
+            "WPA: Receive FT: 0e:ea:14:a0:22:a7 STA Roamed: 76:27:03:0e:78:15"
+        )
+        self.assertEqual(event.event_type, "fast_transition_roam")
+        self.assertEqual(event.event_category, "wifi_roam")
+        self.assertEqual(event.ap_mac, "0e:ea:14:a0:22:a7")
+        self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(event.mac, "76:27:03:0e:78:15")
+
+    def test_sta_assoc_tracker_failure(self) -> None:
+        event = self._parse_message(
+            'stahtd[3888]: [STA-TRACKER].stahtd_dump_event(): {"message_type":"STA_ASSOC_TRACKER","mac":"c4:82:e1:71:52:e0","vap":"ra0","event_type":"failure","assoc_status":"0","auth_failures":"18","event_id":"167","auth_ts":"772859.997409"}'
+        )
+        self.assertEqual(event.event_type, "assoc_tracker_failure")
+        self.assertEqual(event.event_category, "wifi_association")
+        self.assertEqual(event.client_mac, "c4:82:e1:71:52:e0")
+        self.assertEqual(event.mac, "c4:82:e1:71:52:e0")
+        self.assertEqual(event.radio, "ra0")
+        self.assertEqual(event.internal_event_ts, "772859.997409")
+        self.assertEqual(event.internal_event_ts_float, 772859.997409)
+        self.assertEqual(event.assoc_status, "0")
+        self.assertEqual(event.auth_failures, "18")
+        self.assertEqual(event.sta_tracker_event_id, "167")
+
+    def test_wireless_agg_dns_timeout(self) -> None:
+        event = self._parse_message(
+            "mcad[3901]: wireless_agg_stats.log_sta_anomalies(): bssid=0e:ea:14:af:a1:59 radio=rai0 vap=rai2 sta=ac:f2:3c:00:18:b5 satisfaction_now=60 anomalies=dns_timeout"
+        )
+        self.assertEqual(event.event_type, "dns_timeout")
+        self.assertEqual(event.event_category, "network_dns")
+        self.assertEqual(event.ap_mac, "0e:ea:14:af:a1:59")
+        self.assertEqual(event.client_mac, "ac:f2:3c:00:18:b5")
+        self.assertEqual(event.radio, "rai0")
+        self.assertEqual(event.vap, "rai2")
+        self.assertEqual(event.satisfaction_now, 60)
+
+    def test_ace_reporter_save_config(self) -> None:
+        event = self._parse_message(
+            "mcad[3903]: ace_reporter.reporter_save_config(): inform_url: http://10.10.242.231:8080/inform"
+        )
+        self.assertEqual(event.event_type, "device_config_report")
+        self.assertEqual(event.event_category, "device_management")
+        self.assertEqual(event.process_name, "mcad")
+        self.assertEqual(event.config_key, "inform_url")
+        self.assertEqual(event.config_value, "http://10.10.242.231:8080/inform")
+
 
 if __name__ == "__main__":
     unittest.main()

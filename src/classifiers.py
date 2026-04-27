@@ -22,6 +22,10 @@ SYSTEM_EVENT_RE = re.compile(
     re.IGNORECASE,
 )
 DNS_TIMEOUT_RE = re.compile(r"\bDNS request timed out\b", re.IGNORECASE)
+FAST_TRANSITION_ROAM_RE = re.compile(
+    r"\bWPA:\s*Receive\s+FT:\s*(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\s+STA\s+Roamed:\s*(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b",
+    re.IGNORECASE,
+)
 WIFI_SCAN_SANITY_FAILED_RE = re.compile(
     r"\bubnt_get_scan_result:\s*sanity check failed,\s*invalid BssEntry\b",
     re.IGNORECASE,
@@ -60,6 +64,18 @@ STATION_IDLE_PROBE_RE = re.compile(
     re.IGNORECASE,
 )
 DRIVER_QUEUE_FLUSH_RE = re.compile(r"\bcb2,\s*flush one!\b", re.IGNORECASE)
+WIRELESS_AGG_DNS_TIMEOUT_RE = re.compile(
+    r"\bwireless_agg_stats\.log_sta_anomalies\(\):.*\banomalies\s*=\s*dns_timeout\b",
+    re.IGNORECASE,
+)
+STA_ASSOC_TRACKER_FAILURE_RE = re.compile(
+    r'STA_ASSOC_TRACKER".*?"event_type"\s*:\s*"failure"',
+    re.IGNORECASE,
+)
+ACE_REPORTER_SAVE_CONFIG_RE = re.compile(
+    r"\bace_reporter\.reporter_save_config\(\):\s*[^:]+:\s*.+$",
+    re.IGNORECASE,
+)
 
 
 def classify_event_type(message: str) -> Optional[str]:
@@ -76,6 +92,14 @@ def classify_event_type(message: str) -> Optional[str]:
         return "dns_timeout"
     if STA_ASSOC_TRACKER_DNS_TIMEOUT_RE.search(message):
         return "dns_timeout"
+    if FAST_TRANSITION_ROAM_RE.search(message):
+        return "fast_transition_roam"
+    if WIRELESS_AGG_DNS_TIMEOUT_RE.search(message):
+        return "dns_timeout"
+    if STA_ASSOC_TRACKER_FAILURE_RE.search(message):
+        return "assoc_tracker_failure"
+    if ACE_REPORTER_SAVE_CONFIG_RE.search(message):
+        return "device_config_report"
     if REASSOC_RESPONSE_RE.search(message):
         return "reassoc_response"
     if REASSOC_REQ_RE.search(message):
@@ -147,6 +171,12 @@ def classify_event_category(
         return "wifi_system"
     if event_type in {"reassoc_request", "reassoc_response", "reassoc_processing_time"}:
         return "wifi_roam"
+    if event_type == "fast_transition_roam":
+        return "wifi_roam"
+    if event_type == "assoc_tracker_failure":
+        return "wifi_association"
+    if event_type == "device_config_report":
+        return "device_management"
     if event_type in {"cfg80211_assoc_request_handler", "driver_missing_station_entry", "station_table_insert", "station_table_delete", "driver_queue_flush"}:
         return "wifi_driver"
     if event_type in {"eapol_packet", "eapol_key"}:
