@@ -14,6 +14,7 @@ class UnknownOutputsTests(unittest.TestCase):
             parsed_path = base_path / "parsed_events.json"
             canonical_path = base_path / "canonical_events.json"
             report_path = base_path / "parser_report.json"
+            quality_report_path = base_path / "quality_report.json"
             unknown_events_path = base_path / "unknown_events.json"
             unknown_summary_path = base_path / "unknown_summary.json"
             unknown_samples_path = base_path / "unknown_samples.json"
@@ -40,6 +41,7 @@ class UnknownOutputsTests(unittest.TestCase):
                 parsed_path,
                 canonical_output_path=canonical_path,
                 parser_report_output_path=report_path,
+                quality_report_output_path=quality_report_path,
                 unknown_events_output_path=unknown_events_path,
                 unknown_summary_output_path=unknown_summary_path,
                 unknown_samples_output_path=unknown_samples_path,
@@ -49,6 +51,7 @@ class UnknownOutputsTests(unittest.TestCase):
             unknown_summary = json.loads(unknown_summary_path.read_text(encoding="utf-8"))
             unknown_samples = json.loads(unknown_samples_path.read_text(encoding="utf-8"))
             parser_report = json.loads(report_path.read_text(encoding="utf-8"))
+            quality_report = json.loads(quality_report_path.read_text(encoding="utf-8"))
 
             self.assertEqual(len(unknown_events), 2)
             self.assertEqual(
@@ -61,6 +64,8 @@ class UnknownOutputsTests(unittest.TestCase):
             self.assertGreaterEqual(len(unknown_samples), 1)
             self.assertEqual(parser_report["unknown_events_exported_count"], 2)
             self.assertEqual(parser_report["unknown_event_count_total"], 2)
+            self.assertTrue(quality_report["unknown_files_are_consistent"])
+            self.assertEqual(quality_report["unknown_events_exported"], 2)
             self.assertEqual(
                 Path(parser_report["generated_files"]["unknown_events"]).name,
                 "unknown_events.json",
@@ -81,6 +86,7 @@ class UnknownOutputsTests(unittest.TestCase):
             parsed_path = base_path / "parsed_events.json"
             canonical_path = base_path / "canonical_events.json"
             report_path = base_path / "parser_report.json"
+            quality_report_path = base_path / "quality_report.json"
             unknown_events_path = base_path / "unknown_events.json"
             unknown_summary_path = base_path / "unknown_summary.json"
             unknown_samples_path = base_path / "unknown_samples.json"
@@ -103,6 +109,7 @@ class UnknownOutputsTests(unittest.TestCase):
                 parsed_path,
                 canonical_output_path=canonical_path,
                 parser_report_output_path=report_path,
+                quality_report_output_path=quality_report_path,
                 unknown_events_output_path=unknown_events_path,
                 unknown_summary_output_path=unknown_summary_path,
                 unknown_samples_output_path=unknown_samples_path,
@@ -111,13 +118,37 @@ class UnknownOutputsTests(unittest.TestCase):
             unknown_events = json.loads(unknown_events_path.read_text(encoding="utf-8"))
             unknown_summary = json.loads(unknown_summary_path.read_text(encoding="utf-8"))
             parser_report = json.loads(report_path.read_text(encoding="utf-8"))
+            quality_report = json.loads(quality_report_path.read_text(encoding="utf-8"))
 
             self.assertEqual(unknown_events, [])
             self.assertEqual(unknown_summary["total_unknown_events"], 0)
             self.assertEqual(json.loads(unknown_samples_path.read_text(encoding="utf-8")), [])
             self.assertEqual(parser_report["unknown_event_count"], 0)
             self.assertEqual(parser_report["unknown_events_exported_count"], 0)
+            self.assertEqual(quality_report["unknown_events_exported"], 0)
             self.assertIn("event_category_counts", parser_report)
+
+    def test_known_driver_event_with_unknown_category_is_not_exported_as_unknown(self) -> None:
+        parsed_events = [
+            {
+                "line_number": 1,
+                "event_type": "driver_queue_flush",
+                "event_category": "unknown",
+                "raw_message": "cb2, flush one!",
+                "parse_status": "parsed",
+            },
+            {
+                "line_number": 2,
+                "event_type": None,
+                "event_category": "unknown",
+                "raw_message": "some unmatched message",
+                "parse_status": "parsed",
+            },
+        ]
+
+        unknown_events = parser.extract_unknown_events(parsed_events)
+        self.assertEqual(len(unknown_events), 1)
+        self.assertIsNone(unknown_events[0]["event_type"])
 
 
 if __name__ == "__main__":
