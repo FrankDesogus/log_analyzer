@@ -24,6 +24,7 @@ class ParsedEvent:
     ap_mac: Optional[str] = None
     radio: Optional[str] = None
     rssi: Optional[int] = None
+    avg_rssi: Optional[int] = None
     duplicate_group_key: Optional[str] = None
     is_duplicate_candidate: bool = False
     duplicate_group_size: int = 1
@@ -75,6 +76,18 @@ class ParsedEvent:
     interface: Optional[str] = None
     port: Optional[int] = None
     link_state: Optional[str] = None
+    radius_session_id: Optional[str] = None
+    ip_assign_type: Optional[str] = None
+    sta_dc_reason: Optional[str] = None
+    wpa_auth_delta: Optional[str] = None
+    assoc_delta: Optional[str] = None
+    auth_delta: Optional[str] = None
+    channel: Optional[int] = None
+    band: Optional[str] = None
+    channel_width: Optional[str] = None
+    roaming_from_rssi: Optional[int] = None
+    roaming_to_rssi: Optional[int] = None
+    stp_status: Optional[str] = None
     fine_duplicate_group_key: Optional[str] = None
     fine_duplicate_group_size: int = 1
     is_fine_duplicate_candidate: bool = False
