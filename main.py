@@ -9,6 +9,8 @@ if __name__ == "__main__":
     parsed_output_file = output_dir / "parsed_events.json"
     canonical_output_file = output_dir / "canonical_events.json"
     parser_report_output_file = output_dir / "parser_report.json"
+    unknown_events_output_file = output_dir / "unknown_events.json"
+    unknown_summary_output_file = output_dir / "unknown_summary.json"
     include_raw_in_canonical_output = False
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -17,5 +19,7 @@ if __name__ == "__main__":
         parsed_output_file,
         canonical_output_path=canonical_output_file,
         parser_report_output_path=parser_report_output_file,
+        unknown_events_output_path=unknown_events_output_file,
+        unknown_summary_output_path=unknown_summary_output_file,
         include_raw_in_canonical_output=include_raw_in_canonical_output,
     )
