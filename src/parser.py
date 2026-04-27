@@ -1,10 +1,11 @@
 import json
 import math
 import re
+from collections import Counter
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from src.classifiers import classify_event_category, classify_event_type
 from src.correlation import build_canonical_events
@@ -89,6 +90,8 @@ def parse_file(
     input_path: Path,
     output_path: Path,
     canonical_output_path: Optional[Path] = None,
+    parser_report_output_path: Optional[Path] = None,
+    include_raw_in_canonical_output: bool = False,
 ) -> None:
     parsed_events = parse_file_to_events(input_path)
 
@@ -102,11 +105,23 @@ def parse_file(
         return
 
     correlated_payload = build_canonical_events(parsed_events)
+    canonical_payload: dict[str, Any] = {
+        "canonical_events": correlated_payload["canonical_events"],
+    }
+    if include_raw_in_canonical_output:
+        canonical_payload["raw_events"] = correlated_payload["raw_events"]
+
     with canonical_output_path.open("w", encoding="utf-8") as file_out:
-        json.dump(correlated_payload, file_out, indent=2, ensure_ascii=False)
+        json.dump(canonical_payload, file_out, indent=2, ensure_ascii=False)
 
     print(f"Eventi canonici prodotti: {len(correlated_payload['canonical_events'])}")
     print(f"Output canonico scritto in: {canonical_output_path}")
+
+    if parser_report_output_path is not None:
+        parser_report = build_parser_report(parsed_events, correlated_payload["canonical_events"])
+        with parser_report_output_path.open("w", encoding="utf-8") as file_out:
+            json.dump(parser_report, file_out, indent=2, ensure_ascii=False)
+        print(f"Report parser scritto in: {parser_report_output_path}")
 
 
 def parse_file_with_canonical_events(input_path: Path, output_path: Path) -> None:
@@ -119,6 +134,46 @@ def parse_file_with_canonical_events(input_path: Path, output_path: Path) -> Non
     print(f"Lette {len(parsed_events)} righe.")
     print(f"Eventi canonici prodotti: {len(correlated_payload['canonical_events'])}")
     print(f"Output scritto in: {output_path}")
+
+
+def build_parser_report(parsed_events: list[dict[str, Any]], canonical_events: list[dict[str, Any]]) -> dict[str, Any]:
+    parse_status_counts = Counter((event.get("parse_status") or "unknown") for event in parsed_events)
+    event_type_counts = Counter((event.get("event_type") or "unknown") for event in parsed_events)
+    canonical_event_type_counts = Counter(
+        (event.get("canonical_event_type") or "unknown") for event in canonical_events
+    )
+
+    client_mac_counts = Counter(event.get("client_mac") for event in parsed_events if event.get("client_mac"))
+    source_ip_counts = Counter(event.get("source_ip") for event in parsed_events if event.get("source_ip"))
+    duplicate_candidates = sum(1 for event in parsed_events if event.get("is_duplicate_candidate"))
+    fine_duplicate_candidates = sum(1 for event in parsed_events if event.get("is_fine_duplicate_candidate"))
+
+    return {
+        "total_raw_events": len(parsed_events),
+        "total_canonical_events": len(canonical_events),
+        "parse_status_counts": dict(parse_status_counts),
+        "event_type_counts": dict(event_type_counts),
+        "canonical_event_type_counts": dict(canonical_event_type_counts),
+        "correlation_summary": {
+            "duplicate_candidates": duplicate_candidates,
+            "fine_duplicate_candidates": fine_duplicate_candidates,
+            "raw_events_grouped_into_canonical": sum(
+                int(event.get("raw_event_count") or 0) for event in canonical_events
+            ),
+            "canonical_events_with_multiple_raw_events": sum(
+                1 for event in canonical_events if int(event.get("raw_event_count") or 0) > 1
+            ),
+        },
+        "unknown_event_count": event_type_counts.get("unknown", 0),
+        "events_without_client_mac": sum(1 for event in parsed_events if not event.get("client_mac")),
+        "events_without_radio": sum(1 for event in parsed_events if not event.get("radio")),
+        "top_client_mac_by_event_count": [
+            {"client_mac": key, "event_count": count} for key, count in client_mac_counts.most_common(10)
+        ],
+        "top_source_ip_by_event_count": [
+            {"source_ip": key, "event_count": count} for key, count in source_ip_counts.most_common(10)
+        ],
+    }
 
 
 def parse_file_to_events(input_path: Path) -> list[dict]:
