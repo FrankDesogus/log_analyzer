@@ -302,6 +302,9 @@ def _derive_canonical_event_type(
     has_device_mgmt_report = "device_config_report" in event_types
     has_wifi_scan_error = "wifi_scan_error" in event_types
     has_system_maintenance = "system_cache_drop" in event_types
+    has_wifi_security_flow = any(
+        event_type in {"wifi_key_add", "wifi_ap_key_add"} for event_type in event_types
+    )
     process_names_normalized = {name.lower() for name in (process_names or set())}
     has_device_mgmt_process = bool({"mcad", "syswrapper", "logread", "procd"} & process_names_normalized)
     has_device_mgmt_category = bool({"device_management", "controller_config"} & set(event_categories or set()))
@@ -349,6 +352,8 @@ def _derive_canonical_event_type(
         return "wifi_disconnect_sequence"
     if has_disconnect_flow:
         return "wifi_disconnect_sequence"
+    if has_wifi_security_flow:
+        return "wifi_security_sequence"
 
     return "wifi_unknown_sequence"
 
@@ -369,6 +374,8 @@ def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
     assoc_tracker_failure_count = cluster.event_type_counts.get("assoc_tracker_failure", 0)
     dns_timeout_count = cluster.event_type_counts.get("dns_timeout", 0)
     device_config_report_count = cluster.event_type_counts.get("device_config_report", 0)
+    wifi_key_add_count = cluster.event_type_counts.get("wifi_key_add", 0)
+    wifi_ap_key_add_count = cluster.event_type_counts.get("wifi_ap_key_add", 0)
 
     summary = {
         "auth_request_count": auth_request_count,
@@ -386,6 +393,8 @@ def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
         "assoc_tracker_failure_count": assoc_tracker_failure_count,
         "dns_timeout_count": dns_timeout_count,
         "device_config_report_count": device_config_report_count,
+        "wifi_key_add_count": wifi_key_add_count,
+        "wifi_ap_key_add_count": wifi_ap_key_add_count,
         "rssi_values": list(cluster.rssi_values),
         "rssi_min": min(cluster.rssi_values) if cluster.rssi_values else None,
         "rssi_max": max(cluster.rssi_values) if cluster.rssi_values else None,
