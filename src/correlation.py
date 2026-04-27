@@ -10,6 +10,8 @@ DEFAULT_MAX_CONSECUTIVE_TIMESTAMP_GAP_SECONDS = 3.0
 DEFAULT_MAX_CONSECUTIVE_RAW_LINE_GAP = 120
 DEFAULT_MAX_ASSOC_FAILURE_ATTACH_GAP_SECONDS = 0.75
 DEFAULT_MAX_ASSOC_FAILURE_ATTACH_LINE_GAP = 30
+DEFAULT_MAX_WIFI_DISCONNECT_TIMESTAMP_GAP_SECONDS = 1.0
+DEFAULT_MAX_WIFI_DISCONNECT_SEQUENCE_SPAN_SECONDS = 12.0
 CORRELATION_STRATEGY = "source_ip+client_mac+radio_or_fallback+internal_event_ts_window"
 
 
@@ -20,6 +22,8 @@ class CorrelationConfig:
     max_consecutive_raw_line_gap: int = DEFAULT_MAX_CONSECUTIVE_RAW_LINE_GAP
     max_assoc_failure_attach_gap_seconds: float = DEFAULT_MAX_ASSOC_FAILURE_ATTACH_GAP_SECONDS
     max_assoc_failure_attach_line_gap: int = DEFAULT_MAX_ASSOC_FAILURE_ATTACH_LINE_GAP
+    max_wifi_disconnect_timestamp_gap_seconds: float = DEFAULT_MAX_WIFI_DISCONNECT_TIMESTAMP_GAP_SECONDS
+    max_wifi_disconnect_sequence_span_seconds: float = DEFAULT_MAX_WIFI_DISCONNECT_SEQUENCE_SPAN_SECONDS
 
 
 @dataclass
@@ -151,6 +155,15 @@ def _can_attach_to_cluster(cluster: _ClusterState, event: dict[str, Any], config
         return False
 
     gap_seconds = abs(event_ts - cluster_last_ts)
+    event_type = str(event.get("event_type") or "")
+    if _is_disconnect_only_flow(cluster.event_types, event_type):
+        if gap_seconds > config.max_wifi_disconnect_timestamp_gap_seconds:
+            return False
+        if cluster.first_sort_ts is not None:
+            disconnect_span_seconds = abs(event_ts - cluster.first_sort_ts)
+            if disconnect_span_seconds > config.max_wifi_disconnect_sequence_span_seconds:
+                return False
+
     cluster_last_internal_ts = cluster.last_internal_event_ts
     event_internal_ts = _to_float_or_none(event.get("internal_event_ts_float"))
 
@@ -328,6 +341,28 @@ def _is_assoc_failure_far_from_auth_disconnect(
     return False
 
 
+def _is_disconnect_only_flow(cluster_event_types: set[str], incoming_event_type: str) -> bool:
+    disconnect_types = {
+        "disconnect",
+        "station_delete",
+        "cfg80211_station_delete",
+        "cfg80211_station_delete_start",
+        "cfg80211_station_delete_end",
+        "station_table_delete",
+        "driver_missing_station_entry",
+        "deauth_sent",
+        "radius_entry_delete",
+        "hostapd_sta_remove",
+        "wifi_key_delete",
+        "station_idle_probe",
+    }
+    if incoming_event_type not in disconnect_types:
+        return False
+    if not cluster_event_types:
+        return False
+    return cluster_event_types.issubset(disconnect_types)
+
+
 def _build_canonical_event_id(cluster: _ClusterState, canonical_index: int) -> str:
     source_ip = (cluster.source_ip or "unknown").replace(":", "")
     client_mac = (cluster.client_mac or "unknown").replace(":", "")
@@ -430,7 +465,7 @@ def _derive_canonical_event_type(
     has_device_config_version_change = "device_config_version_change" in event_types
     has_unifi_config_audit = "unifi_config_audit" in event_types
     has_wifi_scan_error = "wifi_scan_error" in event_types
-    has_system_maintenance = "system_cache_drop" in event_types
+    has_system_maintenance = bool({"system_cache_drop", "system_state_lock_warning"} & event_types)
     has_wifi_quality_retry_burst = "wifi_tx_retry_burst" in event_types
     has_wifi_security_flow = any(
         event_type in {"wifi_key_add", "wifi_ap_key_add"} for event_type in event_types

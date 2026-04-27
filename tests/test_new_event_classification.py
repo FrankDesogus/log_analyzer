@@ -258,6 +258,23 @@ class NewEventClassificationTests(unittest.TestCase):
         self.assertEqual(event.old_config_version, "1735842944")
         self.assertEqual(event.new_config_version, "1735842950")
 
+    def test_unifi_settings_audit_cef_extensions(self) -> None:
+        event = self._parse_message(
+            "true UNIFIaccessMethod=web UNIFIsettingsSection=System UNIFIsettingsEntry=rsyslogd "
+            "UNIFIadmin=UniFi User msg=UniFi User made a change to in System settings"
+        )
+        self.assertEqual(event.event_type, "unifi_config_audit")
+        self.assertEqual(event.event_category, "device_config")
+
+    def test_system_state_lock_warning(self) -> None:
+        failed_lock = self._parse_message("[WARN ] Failed to lock /var/run/system.state.lock")
+        skip_reload = self._parse_message("[state is locked] skipping reload")
+
+        self.assertEqual(failed_lock.event_type, "system_state_lock_warning")
+        self.assertEqual(failed_lock.event_category, "system_maintenance")
+        self.assertEqual(skip_reload.event_type, "system_state_lock_warning")
+        self.assertEqual(skip_reload.event_category, "system_maintenance")
+
     def test_unifi_cef_config_modified(self) -> None:
         event = self._parse_message(
             'CEF:0|Ubiquiti|UniFi Network|8.0.7|100|Config Modified|5|cs2=web cs3=services cs4=advanced_features suser=admin start=1713620478 src=10.0.0.9 site=default host=udm'
