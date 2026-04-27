@@ -1,6 +1,6 @@
 import unittest
 
-from src.parser import parse_line
+from src.parser import is_unknown_event, parse_line
 
 
 class NewEventClassificationTests(unittest.TestCase):
@@ -288,6 +288,37 @@ class NewEventClassificationTests(unittest.TestCase):
         self.assertEqual(event.unifi_source_ip, "10.0.0.9")
         self.assertEqual(event.unifi_site, "default")
         self.assertEqual(event.unifi_host, "udm")
+
+    def test_unifi_cef_config_modified_with_space_values_is_not_unknown(self) -> None:
+        lines = [
+            "10.10.242.231 Apr 17 09:23:10 fd446804cccb    CEF:0|Ubiquiti|UniFi Network|10.2.105|546|Config Modified|5|src=10.10.30.59 UNIFIcategory=Audit UNIFIhost=Elthub Server UNIFIsite=Default UNIFIsettingsChanges=this_controller: true UNIFIaccessMethod=web UNIFIsettingsSection=System UNIFIsettingsEntry=rsyslogd UNIFIadmin=UniFi User UNIFIutcTime=2026-04-17T07:23:10.583Z msg=UniFi User made a change to  in System settings. Source IP: 10.10.30.59",
+            "10.10.242.231 Apr 17 09:24:10 fd446804cccb    CEF:0|Ubiquiti|UniFi Network|10.2.105|546|Config Modified|5|src=10.10.30.59 UNIFIcategory=Audit UNIFIhost=Elthub Server UNIFIsite=Default UNIFIsettingsChanges=this_controller: false UNIFIaccessMethod=web UNIFIsettingsSection=System UNIFIsettingsEntry=rsyslogd UNIFIadmin=UniFi User UNIFIutcTime=2026-04-17T07:24:10.583Z msg=UniFi User made a change to  in System settings. Source IP: 10.10.30.59",
+            "10.10.242.231 Apr 17 09:25:10 fd446804cccb    CEF:0|Ubiquiti|UniFi Network|10.2.105|546|Config Modified|5|src=10.10.30.59 UNIFIcategory=Audit UNIFIhost=Elthub Server UNIFIsite=Default UNIFIsettingsChanges=this_controller: true UNIFIaccessMethod=web UNIFIsettingsSection=System UNIFIsettingsEntry=rsyslogd UNIFIadmin=UniFi User UNIFIutcTime=2026-04-17T07:25:10.583Z msg=UniFi User made a change to  in System settings. Source IP: 10.10.30.59",
+        ]
+
+        settings_values = []
+        for line in lines:
+            event = parse_line(line)
+            self.assertIsNotNone(event)
+            self.assertEqual(event.parse_status, "parsed")
+            self.assertEqual(event.event_type, "unifi_config_audit")
+            self.assertEqual(event.event_category, "device_config")
+            self.assertEqual(event.process_name, "unifi")
+            self.assertFalse(is_unknown_event(event.to_dict()))
+            self.assertEqual(event.src_ip, "10.10.30.59")
+            self.assertEqual(event.admin_source_ip, "10.10.30.59")
+            self.assertEqual(event.unifi_category, "Audit")
+            self.assertEqual(event.unifi_host, "Elthub Server")
+            self.assertEqual(event.unifi_site, "Default")
+            self.assertEqual(event.settings_changes, f"this_controller: {event.settings_value}")
+            self.assertEqual(event.access_method, "web")
+            self.assertEqual(event.settings_section, "System")
+            self.assertEqual(event.settings_entry, "rsyslogd")
+            self.assertEqual(event.admin, "UniFi User")
+            self.assertEqual(event.message, "UniFi User made a change to  in System settings. Source IP: 10.10.30.59")
+            settings_values.append(event.settings_value)
+
+        self.assertEqual(settings_values, ["true", "false", "true"])
 
     def test_dns_buffer_error(self) -> None:
         event = self._parse_message("[773999.100000] [STA_TRACKER] DNS buffer error: flags 32")

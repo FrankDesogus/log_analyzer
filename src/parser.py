@@ -30,6 +30,14 @@ HEADER_RE = re.compile(
     r"(?P<severity>\S+)\s+"
     r"(?P<rest>.+)$"
 )
+UNIFI_CEF_HEADER_RE = re.compile(
+    r"^(?P<source_ip>\S+)\s+"
+    r"(?P<month>[A-Z][a-z]{2})\s+"
+    r"(?P<day>\d{1,2})\s+"
+    r"(?P<time>\d{2}:\d{2}:\d{2})\s+"
+    r"(?P<host>\S+)\s+"
+    r"(?P<rest>CEF:0\|Ubiquiti\|UniFi Network\|.+)$"
+)
 INTERNAL_EVENT_TS_RE = re.compile(r"\[(\d+\.\d+)\]")
 
 # Configurabile per adattare il raggruppamento fine a burst quasi-identici
@@ -191,6 +199,12 @@ UNIFI_CEF_CONFIG_MODIFIED_DETAILS_RE = re.compile(
 KEY_VALUE_TOKEN_RE = re.compile(
     r"(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)=(?P<value>\"[^\"]*\"|\S+)"
 )
+KEY_TOKEN_START_RE = re.compile(r"(?<!\S)(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)=")
+UNIFI_THIS_CONTROLLER_RE = re.compile(r"\bthis_controller:\s*(?P<value>true|false)\b", re.IGNORECASE)
+UNIFI_SOURCE_IP_FROM_MSG_RE = re.compile(
+    r"(?:\bSource IP:\s*|\bsrc=)(?P<source_ip>(?:\d{1,3}\.){3}\d{1,3})",
+    re.IGNORECASE,
+)
 WIFI_TX_RETRY_BURST_DETAILS_RE = re.compile(
     r"(?:(?P<radio>ra(?:i|x)?\d+):\s*)?StaTXRetryBurstPeriodicExec.*?(?:MAC|STA|sta)[:=](?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}).*?(?:cur(?:rent)?_?tx(?:_?attempts)?|txAttemptCur)[:=](?P<tx_attempts_current>\d+).*?(?:tot(?:al)?_?tx(?:_?attempts)?|txAttemptTotal)[:=](?P<tx_attempts_total>\d+).*?(?:cur(?:rent)?_?retry(?:_?count)?|txRetryCur)[:=](?P<tx_retries_current>\d+).*?(?:tot(?:al)?_?retry(?:_?count)?|txRetryTotal)[:=](?P<tx_retries_total>\d+).*?(?:rssi(?:_?cur(?:rent)?)?)[:=](?P<rssi_current>-?\d+).*?(?:rssi(?:_?prev(?:ious)?)?)[:=](?P<rssi_previous>-?\d+).*?(?:last_?tx_?rate|lastTxRate)[:=](?P<last_tx_rate>[A-Za-z0-9./_-]+).*?(?:burst_?ratio_?cur(?:rent)?|burstRatioCur)[:=](?P<burst_ratio_current>\d+).*?(?:burst_?ratio_?tot(?:al)?|burstRatioTotal)[:=](?P<burst_ratio_total>\d+).*?(?:burst_?count|burstCnt)[:=](?P<burst_count>\d+)",
     re.IGNORECASE,
@@ -236,13 +250,28 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
 
     header_match = HEADER_RE.match(stripped_line)
     if not header_match:
-        return ParsedEvent(
-            parse_status="unparsed",
-            raw_line=stripped_line,
-        )
-
-    data = header_match.groupdict()
-    process, message = extract_process_and_message(data["rest"])
+        unifi_cef_header_match = UNIFI_CEF_HEADER_RE.match(stripped_line)
+        if not unifi_cef_header_match:
+            return ParsedEvent(
+                parse_status="unparsed",
+                raw_line=stripped_line,
+            )
+        data = unifi_cef_header_match.groupdict()
+        data["facility"] = "daemon"
+        data["severity"] = "info"
+    else:
+        data = header_match.groupdict()
+        if str(data.get("facility") or "").startswith("CEF:0|Ubiquiti|UniFi"):
+            unifi_cef_header_match = UNIFI_CEF_HEADER_RE.match(stripped_line)
+            if unifi_cef_header_match:
+                data = unifi_cef_header_match.groupdict()
+                data["facility"] = "daemon"
+                data["severity"] = "info"
+    rest = data["rest"].strip()
+    if rest.startswith("CEF:0|"):
+        process, message = None, rest
+    else:
+        process, message = extract_process_and_message(data["rest"])
     process_name = extract_process_name(process, message)
     event_type = classify_event_type(message)
     if event_type is None and process_name == "syslogd" and SYSLOGD_LIFECYCLE_RE.search(message):
@@ -368,6 +397,16 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         unifi_source_ip=additional_fields.get("unifi_source_ip"),
         unifi_site=additional_fields.get("unifi_site"),
         unifi_host=additional_fields.get("unifi_host"),
+        src_ip=additional_fields.get("src_ip"),
+        admin_source_ip=additional_fields.get("admin_source_ip"),
+        unifi_category=additional_fields.get("unifi_category"),
+        settings_changes=additional_fields.get("settings_changes"),
+        settings_value=additional_fields.get("settings_value"),
+        access_method=additional_fields.get("access_method"),
+        settings_section=additional_fields.get("settings_section"),
+        settings_entry=additional_fields.get("settings_entry"),
+        admin=additional_fields.get("admin"),
+        message=additional_fields.get("message"),
         dns_buffer_flags=additional_fields.get("dns_buffer_flags"),
         tx_attempts_current=additional_fields.get("tx_attempts_current"),
         tx_attempts_total=additional_fields.get("tx_attempts_total"),
@@ -1143,6 +1182,20 @@ def build_internal_event_bucket(
 def parse_key_value_tokens(raw_extensions: Optional[str]) -> dict[str, str]:
     if not raw_extensions:
         return {}
+
+    token_starts = list(KEY_TOKEN_START_RE.finditer(raw_extensions))
+    if token_starts:
+        extracted: dict[str, str] = {}
+        for index, token in enumerate(token_starts):
+            key = token.group("key")
+            value_start = token.end()
+            value_end = token_starts[index + 1].start() if index + 1 < len(token_starts) else len(raw_extensions)
+            value = raw_extensions[value_start:value_end].strip()
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+            extracted[key] = value
+        return extracted
+
     extracted: dict[str, str] = {}
     for match in KEY_VALUE_TOKEN_RE.finditer(raw_extensions):
         key = match.group("key")
@@ -1389,16 +1442,39 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
         match = UNIFI_CEF_CONFIG_MODIFIED_DETAILS_RE.search(message)
         if match:
             kv = parse_key_value_tokens(match.group("extensions"))
+            message_value = kv.get("msg")
+            src_ip = kv.get("src")
+            if not src_ip and message_value:
+                source_match = UNIFI_SOURCE_IP_FROM_MSG_RE.search(message_value)
+                if source_match:
+                    src_ip = source_match.group("source_ip")
+            settings_changes = kv.get("UNIFIsettingsChanges")
+            settings_value = None
+            if settings_changes:
+                settings_match = UNIFI_THIS_CONTROLLER_RE.search(settings_changes)
+                if settings_match:
+                    settings_value = settings_match.group("value").lower()
             fields.update(
                 {
-                    "unifi_access_method": kv.get("cs2"),
-                    "unifi_settings_section": kv.get("cs3"),
-                    "unifi_settings_entry": kv.get("cs4"),
-                    "unifi_admin": kv.get("suser"),
-                    "unifi_utc_time": kv.get("start"),
-                    "unifi_source_ip": kv.get("src"),
-                    "unifi_site": kv.get("site"),
-                    "unifi_host": kv.get("host"),
+                    "process_name": "unifi",
+                    "unifi_access_method": kv.get("UNIFIaccessMethod") or kv.get("cs2"),
+                    "unifi_settings_section": kv.get("UNIFIsettingsSection") or kv.get("cs3"),
+                    "unifi_settings_entry": kv.get("UNIFIsettingsEntry") or kv.get("cs4"),
+                    "unifi_admin": kv.get("UNIFIadmin") or kv.get("suser"),
+                    "unifi_utc_time": kv.get("UNIFIutcTime") or kv.get("start"),
+                    "unifi_source_ip": src_ip,
+                    "unifi_site": kv.get("UNIFIsite") or kv.get("site"),
+                    "unifi_host": kv.get("UNIFIhost") or kv.get("host"),
+                    "src_ip": src_ip,
+                    "admin_source_ip": src_ip,
+                    "unifi_category": kv.get("UNIFIcategory"),
+                    "settings_changes": settings_changes,
+                    "settings_value": settings_value,
+                    "access_method": kv.get("UNIFIaccessMethod") or kv.get("cs2"),
+                    "settings_section": kv.get("UNIFIsettingsSection") or kv.get("cs3"),
+                    "settings_entry": kv.get("UNIFIsettingsEntry") or kv.get("cs4"),
+                    "admin": kv.get("UNIFIadmin") or kv.get("suser"),
+                    "message": message_value,
                 }
             )
 
