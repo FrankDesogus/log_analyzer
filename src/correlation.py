@@ -294,8 +294,48 @@ def _derive_canonical_event_type(
             "assoc_success",
             "reassoc_processing_time",
             "fast_transition_roam",
+            "fast_transition_roam_send",
+            "sta_tracker_roam",
             "rrm_neighbor_response",
         }
+        for event_type in event_types
+    )
+    has_wifi_client_lifecycle = any(
+        event_type
+        in {
+            "client_associated",
+            "client_ip_assigned",
+            "client_join",
+            "handshake_completed",
+            "station_join",
+            "assoc_success",
+            "dhcp_ip_assignment",
+        }
+        for event_type in event_types
+    )
+    has_device_config_flow = any(
+        event_type
+        in {
+            "config_setparam",
+            "config_apply",
+            "config_save_required",
+            "config_change",
+            "device_config_report",
+        }
+        for event_type in event_types
+    )
+    has_system_logging_flow = any(
+        event_type
+        in {
+            "logging_config_changed",
+            "syslogd_lifecycle",
+            "logread_lifecycle",
+            "logread_event",
+        }
+        for event_type in event_types
+    )
+    has_link_flow = any(
+        event_type in {"link_up", "link_down", "network_link_up", "network_link_down"}
         for event_type in event_types
     )
     has_dns_anomaly = "dns_timeout" in event_types
@@ -332,6 +372,10 @@ def _derive_canonical_event_type(
         return "wifi_eapol_handshake_sequence"
     if has_system_maintenance:
         return "system_maintenance_sequence"
+    if has_system_logging_flow:
+        return "system_logging_sequence"
+    if has_device_config_flow:
+        return "device_config_sequence"
     if has_wifi_scan_error:
         return "wifi_system_sequence"
     if has_device_mgmt_report or has_device_mgmt_process or has_device_mgmt_category:
@@ -342,6 +386,8 @@ def _derive_canonical_event_type(
         return "wifi_assoc_failure_sequence"
     if has_roam_flow:
         return "wifi_roam_sequence"
+    if has_wifi_client_lifecycle:
+        return "wifi_client_lifecycle_sequence"
     if has_dns_anomaly:
         return "network_dns_anomaly_sequence"
     if has_assoc_flow:
@@ -354,6 +400,10 @@ def _derive_canonical_event_type(
         return "wifi_disconnect_sequence"
     if has_wifi_security_flow:
         return "wifi_security_sequence"
+    if has_link_flow:
+        return "network_link_sequence"
+    if known_event_types:
+        return "known_event_sequence"
 
     return "wifi_unknown_sequence"
 

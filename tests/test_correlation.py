@@ -202,7 +202,7 @@ class CanonicalCorrelationTests(unittest.TestCase):
         self.assertIn("wifi_roam_sequence", canonical_types)
         self.assertIn("wifi_assoc_failure_sequence", canonical_types)
         self.assertIn("network_dns_anomaly_sequence", canonical_types)
-        self.assertIn("device_management_sequence", canonical_types)
+        self.assertIn("device_config_sequence", canonical_types)
 
     def test_known_disconnect_related_events_are_not_unknown(self) -> None:
         payload = build_canonical_events(
@@ -259,6 +259,59 @@ class CanonicalCorrelationTests(unittest.TestCase):
             payload["canonical_events"][0]["canonical_event_type"],
             "wifi_unknown_sequence",
         )
+
+    def test_known_client_lifecycle_sequence_is_not_unknown(self) -> None:
+        payload = build_canonical_events(
+            [
+                {
+                    "line_number": 71,
+                    "source_ip": "10.0.0.70",
+                    "client_mac": "aa:bb:cc:dd:ee:70",
+                    "radio": "rai1",
+                    "event_type": "client_join",
+                    "event_category": "wifi_association",
+                    "internal_event_ts_float": 7000.001,
+                },
+                {
+                    "line_number": 72,
+                    "source_ip": "10.0.0.70",
+                    "client_mac": "aa:bb:cc:dd:ee:70",
+                    "radio": "rai1",
+                    "event_type": "client_ip_assigned",
+                    "event_category": "wifi_client_ip",
+                    "internal_event_ts_float": 7000.010,
+                },
+            ]
+        )
+        self.assertEqual(
+            payload["canonical_events"][0]["canonical_event_type"],
+            "wifi_client_lifecycle_sequence",
+        )
+
+    def test_known_config_and_logging_sequences_are_not_unknown(self) -> None:
+        payload = build_canonical_events(
+            [
+                {
+                    "line_number": 73,
+                    "source_ip": "10.0.0.73",
+                    "event_type": "config_setparam",
+                    "event_category": "device_config",
+                    "process_name": "mcad",
+                    "internal_event_ts_float": 7003.001,
+                },
+                {
+                    "line_number": 74,
+                    "source_ip": "10.0.0.74",
+                    "event_type": "logging_config_changed",
+                    "event_category": "system_logging",
+                    "process_name": "syslogd",
+                    "internal_event_ts_float": 7004.001,
+                },
+            ]
+        )
+        canonical_types = [event["canonical_event_type"] for event in payload["canonical_events"]]
+        self.assertIn("device_config_sequence", canonical_types)
+        self.assertIn("system_logging_sequence", canonical_types)
 
     def test_device_management_processes_map_to_device_management_sequence(self) -> None:
         payload = build_canonical_events(
