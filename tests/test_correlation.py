@@ -204,6 +204,80 @@ class CanonicalCorrelationTests(unittest.TestCase):
         self.assertIn("network_dns_anomaly_sequence", canonical_types)
         self.assertIn("device_management_sequence", canonical_types)
 
+    def test_known_disconnect_related_events_are_not_unknown(self) -> None:
+        payload = build_canonical_events(
+            [
+                {
+                    "line_number": 60,
+                    "source_ip": "10.0.0.60",
+                    "client_mac": "76:27:03:0e:78:15",
+                    "radio": "rai2",
+                    "event_type": "cfg80211_station_delete_start",
+                    "event_category": "wifi_driver",
+                    "internal_event_ts_float": 6000.001,
+                },
+                {
+                    "line_number": 61,
+                    "source_ip": "10.0.0.60",
+                    "client_mac": "76:27:03:0e:78:15",
+                    "radio": "rai2",
+                    "event_type": "station_table_delete",
+                    "event_category": "wifi_driver",
+                    "internal_event_ts_float": 6000.010,
+                },
+                {
+                    "line_number": 62,
+                    "source_ip": "10.0.0.60",
+                    "client_mac": "76:27:03:0e:78:15",
+                    "radio": "rai2",
+                    "event_type": "driver_missing_station_entry",
+                    "event_category": "wifi_driver",
+                    "internal_event_ts_float": 6000.012,
+                },
+            ]
+        )
+        self.assertEqual(len(payload["canonical_events"]), 1)
+        self.assertEqual(
+            payload["canonical_events"][0]["canonical_event_type"],
+            "wifi_disconnect_sequence",
+        )
+
+    def test_unknown_sequence_requires_only_unknown_event_types(self) -> None:
+        payload = build_canonical_events(
+            [
+                {
+                    "line_number": 70,
+                    "source_ip": "10.0.0.70",
+                    "event_type": "unknown",
+                    "event_category": "unknown",
+                    "process_name": "unknown",
+                    "internal_event_ts_float": 7000.001,
+                }
+            ]
+        )
+        self.assertEqual(
+            payload["canonical_events"][0]["canonical_event_type"],
+            "wifi_unknown_sequence",
+        )
+
+    def test_device_management_processes_map_to_device_management_sequence(self) -> None:
+        payload = build_canonical_events(
+            [
+                {
+                    "line_number": 80,
+                    "source_ip": "10.0.0.80",
+                    "event_type": "controller_config",
+                    "event_category": "controller_config",
+                    "process_name": "syswrapper",
+                    "internal_event_ts_float": 8000.001,
+                }
+            ]
+        )
+        self.assertEqual(
+            payload["canonical_events"][0]["canonical_event_type"],
+            "device_management_sequence",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
