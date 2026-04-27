@@ -64,6 +64,12 @@ STATION_IDLE_PROBE_RE = re.compile(
     re.IGNORECASE,
 )
 DRIVER_QUEUE_FLUSH_RE = re.compile(r"\bcb2,\s*flush one!\b", re.IGNORECASE)
+DHCP_IP_ASSIGNMENT_RE = re.compile(
+    r"\b(?:DHCPACK(?:\([^)]+\))?|sending\s+ACK\s+to)\b",
+    re.IGNORECASE,
+)
+LINK_UP_RE = re.compile(r"\blink (?:has become )?up\b", re.IGNORECASE)
+LINK_DOWN_RE = re.compile(r"\blink (?:has become )?down\b", re.IGNORECASE)
 WIRELESS_AGG_DNS_TIMEOUT_RE = re.compile(
     r"\bwireless_agg_stats\.log_sta_anomalies\(\):.*\banomalies\s*=\s*dns_timeout\b",
     re.IGNORECASE,
@@ -122,6 +128,12 @@ def classify_event_type(message: str) -> Optional[str]:
         return "station_idle_probe"
     if DRIVER_QUEUE_FLUSH_RE.search(message):
         return "driver_queue_flush"
+    if DHCP_IP_ASSIGNMENT_RE.search(message):
+        return "dhcp_ip_assignment"
+    if LINK_UP_RE.search(message):
+        return "network_link_up"
+    if LINK_DOWN_RE.search(message):
+        return "network_link_down"
     if CFG80211_ASSOC_REQ_HANDLER_RE.search(message):
         return "cfg80211_assoc_request_handler"
     if EAPOL_KEY_RE.search(message):
@@ -206,6 +218,12 @@ def classify_event_category(
         return "wifi_rrm"
     if event_type == "station_idle_probe":
         return "wifi_keepalive"
+    if event_type == "dhcp_ip_assignment":
+        return "network_dhcp"
+    if event_type in {"network_link_up", "network_link_down"}:
+        return "network_link"
+    if event_type in {"syslogd_lifecycle", "logread_lifecycle"}:
+        return "system_logging"
 
     if ROAM_RE.search(message):
         return "wifi_roam"
