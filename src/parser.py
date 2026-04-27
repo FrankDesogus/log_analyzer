@@ -152,6 +152,14 @@ ACE_REPORTER_SAVE_CONFIG_DETAILS_RE = re.compile(
     r"ace_reporter\.reporter_save_config\(\):\s*(?P<config_key>[^:]+):\s*(?P<config_value>.+)$",
     re.IGNORECASE,
 )
+SYSLOGD_LIFECYCLE_RE = re.compile(
+    r"\b(?:start(?:ed|ing)?|restart(?:ed|ing)?|exiting|exit|shutdown|shutting down)\b",
+    re.IGNORECASE,
+)
+LOGREAD_LIFECYCLE_RE = re.compile(
+    r"\b(?:start(?:ed|ing)?|listening|connected|reopen(?:ed|ing)?|rotate(?:d|ing)?|stop(?:ped|ping)?)\b",
+    re.IGNORECASE,
+)
 
 
 def parse_line(line: str) -> Optional[ParsedEvent]:
@@ -170,6 +178,10 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
     process, message = extract_process_and_message(data["rest"])
     process_name = extract_process_name(process, message)
     event_type = classify_event_type(message)
+    if event_type is None and process_name == "syslogd" and SYSLOGD_LIFECYCLE_RE.search(message):
+        event_type = "syslogd_lifecycle"
+    if event_type is None and process_name == "logread" and LOGREAD_LIFECYCLE_RE.search(message):
+        event_type = "logread_lifecycle"
     event_category = classify_event_category(message, process_name, event_type)
     current_mac = extract_mac(message)
     client_mac, ap_mac, mac = extract_client_ap_mac(message, current_mac)
@@ -1204,6 +1216,12 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
         match = DRIVER_MISSING_ENTRY_RE.search(message)
         if match:
             fields["driver_context"] = match.group("context")
+
+    if event_type == "dhcp_ip_assignment":
+        client_mac = extract_mac(message)
+        if client_mac:
+            fields["client_mac"] = client_mac
+            fields["mac"] = client_mac
 
     return fields
 

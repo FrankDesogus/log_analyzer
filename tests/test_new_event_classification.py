@@ -277,6 +277,40 @@ class NewEventClassificationTests(unittest.TestCase):
         self.assertEqual(event.config_key, "inform_url")
         self.assertEqual(event.config_value, "http://10.10.242.231:8080/inform")
 
+    def test_syslogd_and_logread_lifecycle(self) -> None:
+        syslogd_line = (
+            "10.0.0.1 Apr 23 12:00:00 ap01 daemon info "
+            "syslogd[123]: exiting on signal 15"
+        )
+        logread_line = (
+            "10.0.0.1 Apr 23 12:00:01 ap01 daemon info "
+            "logread[321]: logread started and listening"
+        )
+        syslogd_event = parse_line(syslogd_line)
+        logread_event = parse_line(logread_line)
+        self.assertIsNotNone(syslogd_event)
+        self.assertIsNotNone(logread_event)
+        self.assertEqual(syslogd_event.event_type, "syslogd_lifecycle")
+        self.assertEqual(syslogd_event.event_category, "system_logging")
+        self.assertEqual(syslogd_event.process_name, "syslogd")
+        self.assertEqual(logread_event.event_type, "logread_lifecycle")
+        self.assertEqual(logread_event.event_category, "system_logging")
+        self.assertEqual(logread_event.process_name, "logread")
+
+    def test_dhcp_assignment_and_link_state(self) -> None:
+        dhcp_event = self._parse_message("dnsmasq-dhcp: DHCPACK(br0) 192.168.1.10 aa:bb:cc:dd:ee:ff")
+        link_up = self._parse_message("br-lan: link has become up")
+        link_down = self._parse_message("eth0: link down")
+
+        self.assertEqual(dhcp_event.event_type, "dhcp_ip_assignment")
+        self.assertEqual(dhcp_event.event_category, "network_dhcp")
+        self.assertEqual(dhcp_event.client_mac, "aa:bb:cc:dd:ee:ff")
+
+        self.assertEqual(link_up.event_type, "network_link_up")
+        self.assertEqual(link_up.event_category, "network_link")
+        self.assertEqual(link_down.event_type, "network_link_down")
+        self.assertEqual(link_down.event_category, "network_link")
+
 
 if __name__ == "__main__":
     unittest.main()
