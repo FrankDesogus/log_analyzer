@@ -273,6 +273,7 @@ def parse_file(
     output_path: Path,
     canonical_output_path: Optional[Path] = None,
     parser_report_output_path: Optional[Path] = None,
+    quality_report_output_path: Optional[Path] = None,
     unknown_events_output_path: Optional[Path] = None,
     unknown_summary_output_path: Optional[Path] = None,
     unknown_samples_output_path: Optional[Path] = None,
@@ -331,6 +332,7 @@ def parse_file(
     print(f"Eventi canonici prodotti: {len(correlated_payload['canonical_events'])}")
     print(f"Output canonico scritto in: {canonical_output_path}")
 
+    parser_report: Optional[dict[str, Any]] = None
     if parser_report_output_path is not None:
         parser_report = build_parser_report(
             parsed_events,
@@ -347,6 +349,31 @@ def parse_file(
         with parser_report_output_path.open("w", encoding="utf-8") as file_out:
             json.dump(parser_report, file_out, indent=2, ensure_ascii=False)
         print(f"Report parser scritto in: {parser_report_output_path}")
+
+    quality_report = build_quality_report(
+        parsed_events,
+        correlated_payload["canonical_events"],
+        unknown_events,
+        unknown_summary,
+        parser_report=parser_report,
+    )
+    if quality_report_output_path is not None:
+        with quality_report_output_path.open("w", encoding="utf-8") as file_out:
+            json.dump(quality_report, file_out, indent=2, ensure_ascii=False)
+        print(f"Quality report scritto in: {quality_report_output_path}")
+
+    print("QUALITY CHECK")
+    print(f"- raw events: {quality_report['total_raw_events']}")
+    print(f"- parsed events: {quality_report['total_parsed_events']}")
+    print(f"- canonical events: {quality_report['total_canonical_events']}")
+    print(f"- unknown events exported: {quality_report['unknown_events_exported']}")
+    print(f"- unknown summary count: {quality_report['unknown_summary_count']}")
+    print(f"- unknown counts consistent: {quality_report['unknown_files_are_consistent']}")
+    print(f"- canonical unknown sequences: {quality_report['canonical_unknown_sequences']}")
+    print(
+        "- known event types inside unknown sequences: "
+        f"{quality_report['canonical_unknown_sequences_with_known_event_types']}"
+    )
 
 
 def parse_file_with_canonical_events(input_path: Path, output_path: Path) -> None:
@@ -384,7 +411,7 @@ def build_parser_report(
     source_ip_counts = Counter(event.get("source_ip") for event in parsed_events if event.get("source_ip"))
     duplicate_candidates = sum(1 for event in parsed_events if event.get("is_duplicate_candidate"))
     fine_duplicate_candidates = sum(1 for event in parsed_events if event.get("is_fine_duplicate_candidate"))
-    unknown_event_count_total = sum(1 for event in parsed_events if is_unknown_event_type(event.get("event_type")))
+    unknown_event_count_total = sum(1 for event in parsed_events if is_unknown_event(event))
     unknown_events_full = extract_unknown_events(parsed_events, export_all_unknown_events=True)
     unknown_by_source_ip = Counter((event.get("source_ip") or "unknown") for event in unknown_events_full)
     unknown_by_process_name = Counter((event.get("process_name") or "unknown") for event in unknown_events_full)
@@ -409,7 +436,7 @@ def build_parser_report(
                 1 for event in canonical_events if int(event.get("raw_event_count") or 0) > 1
             ),
         },
-        "unknown_event_count": event_type_counts.get("unknown", 0),
+        "unknown_event_count": unknown_event_count_total,
         "unknown_event_count_total": unknown_event_count_total,
         "unknown_events_exported_count": len(unknown_events),
         "unknown_exported_count": len(unknown_events),
@@ -423,8 +450,23 @@ def build_parser_report(
         "unknown_with_radio_count": unknown_with_radio_count,
         "unknown_without_radio_count": len(unknown_events_full) - unknown_with_radio_count,
         "unknown_reason": {
-            "event_type_null_or_empty_count": unknown_event_count_total - event_type_counts.get("unknown", 0),
-            "event_type_literal_unknown_count": event_type_counts.get("unknown", 0),
+            "event_type_null_or_empty_count": sum(
+                1 for event in parsed_events if is_unknown_event_type(event.get("event_type"))
+            ),
+            "event_category_null_or_empty_count": sum(
+                1 for event in parsed_events if is_unknown_event_category(event.get("event_category"))
+            ),
+            "event_type_literal_unknown_count": sum(
+                1
+                for event in parsed_events
+                if isinstance(event.get("event_type"), str) and event.get("event_type", "").strip().lower() == "unknown"
+            ),
+            "event_category_literal_unknown_count": sum(
+                1
+                for event in parsed_events
+                if isinstance(event.get("event_category"), str)
+                and event.get("event_category", "").strip().lower() == "unknown"
+            ),
         },
         "generated_files": {
             "parsed_events": str(parsed_output_path) if export_parsed_events else None,
@@ -444,12 +486,99 @@ def build_parser_report(
     }
 
 
+def build_quality_report(
+    parsed_events: list[dict[str, Any]],
+    canonical_events: list[dict[str, Any]],
+    unknown_events: list[dict[str, Any]],
+    unknown_summary: dict[str, Any],
+    parser_report: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    unknown_summary_count = int(unknown_summary.get("total_unknown_events", 0))
+    parser_report_unknown_count = int(parser_report.get("unknown_event_count", 0)) if parser_report else unknown_summary_count
+    unknown_files_are_consistent = (
+        len(unknown_events) == unknown_summary_count == parser_report_unknown_count
+    )
+
+    unknown_sequences = [
+        event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_unknown_sequence"
+    ]
+    unknown_sequences_with_known_types = []
+    known_types_counter: Counter[str] = Counter()
+
+    for canonical_event in unknown_sequences:
+        known_types = [
+            event_type for event_type in canonical_event.get("event_types_seen", []) if not is_unknown_event_type(event_type)
+        ]
+        if known_types:
+            unknown_sequences_with_known_types.append(canonical_event)
+            known_types_counter.update(known_types)
+
+    return {
+        "total_raw_events": len(parsed_events),
+        "total_parsed_events": sum(1 for event in parsed_events if (event.get("parse_status") or "") == "parsed"),
+        "total_canonical_events": len(canonical_events),
+        "unknown_events_exported": len(unknown_events),
+        "unknown_unique_patterns": int(unknown_summary.get("unique_pattern_count", 0)),
+        "unknown_summary_count": unknown_summary_count,
+        "parser_report_unknown_count": parser_report_unknown_count,
+        "unknown_files_are_consistent": unknown_files_are_consistent,
+        "canonical_unknown_sequences": len(unknown_sequences),
+        "canonical_unknown_sequences_truly_unknown": len(unknown_sequences) - len(unknown_sequences_with_known_types),
+        "canonical_unknown_sequences_with_known_event_types": len(unknown_sequences_with_known_types),
+        "known_event_types_inside_unknown_sequences": dict(known_types_counter),
+        "top_unknown_patterns": unknown_summary.get("top_patterns", []),
+    }
+
+
 def is_unknown_event_type(event_type: Any) -> bool:
     if event_type is None:
         return True
     if isinstance(event_type, str) and event_type.strip().lower() in {"", "unknown"}:
         return True
     return False
+
+
+def is_unknown_event_category(event_category: Any) -> bool:
+    if event_category is None:
+        return True
+    if isinstance(event_category, str) and event_category.strip().lower() in {"", "unknown"}:
+        return True
+    return False
+
+
+def is_known_event_type_exempt_from_unknown(event_type: Any) -> bool:
+    if not isinstance(event_type, str):
+        return False
+    normalized = event_type.strip().lower()
+    if not normalized or normalized == "unknown":
+        return False
+    if normalized in {
+        "dns_timeout",
+        "device_config_report",
+        "system_cache_drop",
+        "fast_transition_roam",
+        "assoc_tracker_failure",
+        "wifi_scan_error",
+    }:
+        return True
+    if normalized.startswith("eapol") or normalized.startswith("eap_"):
+        return True
+    if normalized.startswith("driver_"):
+        return True
+    return False
+
+
+def is_unknown_event(event: dict[str, Any]) -> bool:
+    event_type = event.get("event_type")
+    event_category = event.get("event_category")
+    unknown_by_type = is_unknown_event_type(event_type)
+    unknown_by_category = is_unknown_event_category(event_category)
+
+    if not (unknown_by_type or unknown_by_category):
+        return False
+    if is_known_event_type_exempt_from_unknown(event_type):
+        return False
+    return True
 
 
 def extract_unknown_events(
@@ -459,7 +588,7 @@ def extract_unknown_events(
 ) -> list[dict[str, Any]]:
     unknown_events: list[dict[str, Any]] = []
     for event in parsed_events:
-        if not is_unknown_event_type(event.get("event_type")):
+        if not is_unknown_event(event):
             continue
         unknown_record = dict(event)
         unknown_record["unknown_pattern"] = normalize_unknown_message_pattern(event.get("raw_message") or "")
