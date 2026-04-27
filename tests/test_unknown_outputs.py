@@ -88,12 +88,10 @@ class UnknownOutputsTests(unittest.TestCase):
             input_path.write_text(
                 "\n".join(
                     [
-                        "10.0.0.1 Apr 23 12:00:00 ap01 daemon info kernel: [773256.261912] [STA_TRACKER] DNS request timed out; [STA: ac:f2:3c:00:18:b5][QUERY: teams.microsoft.com.] [DNS_SERVER :10.10.241.10] [TXN_ID a383] [SRCPORT 50607]",
-                        "10.0.0.1 Apr 23 12:00:01 ap01 daemon info kernel: [772878.601432] ubnt_get_scan_result: sanity check failed, invalid BssEntry",
-                        "10.0.0.1 Apr 23 12:00:02 ap01 daemon info kernel: [773521.070054] sh (25922): drop_caches: 3",
-                        "10.0.0.1 Apr 23 12:00:03 ap01 daemon info kernel: [772920.705502] 80211> CFG80211_OpsStaDel ==> for bssid (0E:EA:14:AF:96:A5)",
-                        "10.0.0.1 Apr 23 12:00:04 ap01 daemon info kernel: [772920.705607] 80211> CFG80211_OpsStaDel <==",
-                        "10.0.0.1 Apr 23 12:00:05 ap01 daemon info kernel: [772918.075520] RTMPCheckEtherType() ==> EAP Packet PortSecure: 2, bClearFrame 1",
+                        "10.0.0.1 Apr 23 12:00:00 ap01 daemon info hostapd: WPA: Receive FT: 0e:ea:14:a0:22:a7 STA Roamed: 76:27:03:0e:78:15",
+                        '10.0.0.1 Apr 23 12:00:01 ap01 daemon info kernel: stahtd[3888]: [STA-TRACKER].stahtd_dump_event(): {"message_type":"STA_ASSOC_TRACKER","mac":"c4:82:e1:71:52:e0","vap":"ra0","event_type":"failure","assoc_status":"0","auth_failures":"18","event_id":"167","auth_ts":"772859.997409"}',
+                        "10.0.0.1 Apr 23 12:00:02 ap01 daemon info kernel: mcad[3901]: wireless_agg_stats.log_sta_anomalies(): bssid=0e:ea:14:af:a1:59 radio=rai0 vap=rai2 sta=ac:f2:3c:00:18:b5 satisfaction_now=60 anomalies=dns_timeout",
+                        "10.0.0.1 Apr 23 12:00:03 ap01 daemon info kernel: mcad[3903]: ace_reporter.reporter_save_config(): is_default: false",
                     ]
                 )
                 + "\n",

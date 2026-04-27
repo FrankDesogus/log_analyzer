@@ -140,6 +140,18 @@ STATION_IDLE_PROBE_RE = re.compile(
     r"(?P<radio>rai?\d+):\s*Send NULL to STA-MAC\s+(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+idle\((?P<idle_seconds>\d+)\)\s+timeout\((?P<timeout_seconds>\d+)\)",
     re.IGNORECASE,
 )
+FAST_TRANSITION_ROAM_DETAILS_RE = re.compile(
+    r"WPA:\s*Receive\s+FT:\s*(?P<ap_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+STA\s+Roamed:\s*(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})",
+    re.IGNORECASE,
+)
+WIRELESS_AGG_DNS_TIMEOUT_DETAILS_RE = re.compile(
+    r"wireless_agg_stats\.log_sta_anomalies\(\):.*?\bbssid=(?P<bssid>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}).*?\bradio=(?P<radio>[A-Za-z0-9_-]+).*?\bvap=(?P<vap>[A-Za-z0-9_-]+).*?\bsta=(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})(?:.*?\bsatisfaction_now=(?P<satisfaction_now>-?\d+))?",
+    re.IGNORECASE,
+)
+ACE_REPORTER_SAVE_CONFIG_DETAILS_RE = re.compile(
+    r"ace_reporter\.reporter_save_config\(\):\s*(?P<config_key>[^:]+):\s*(?P<config_value>.+)$",
+    re.IGNORECASE,
+)
 
 
 def parse_line(line: str) -> Optional[ParsedEvent]:
@@ -179,6 +191,12 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         ap_mac = additional_fields["ap_mac"]
     if "mac" in additional_fields:
         mac = additional_fields["mac"]
+    if "internal_event_ts" in additional_fields:
+        internal_event_ts = additional_fields["internal_event_ts"]
+    if "internal_event_ts_float" in additional_fields:
+        internal_event_ts_float = additional_fields["internal_event_ts_float"]
+    else:
+        internal_event_ts_float = to_float_or_none(internal_event_ts)
     if "radio" in additional_fields:
         radio = additional_fields["radio"]
     else:
@@ -241,6 +259,12 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         qos_map_support=additional_fields.get("qos_map_support"),
         idle_seconds=additional_fields.get("idle_seconds"),
         timeout_seconds=additional_fields.get("timeout_seconds"),
+        vap=additional_fields.get("vap"),
+        satisfaction_now=additional_fields.get("satisfaction_now"),
+        auth_failures=additional_fields.get("auth_failures"),
+        sta_tracker_event_id=additional_fields.get("sta_tracker_event_id"),
+        config_key=additional_fields.get("config_key"),
+        config_value=additional_fields.get("config_value"),
     )
 
 
@@ -731,6 +755,27 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                 "tracker_message_type": tracker_payload.get("message_type"),
             }
         )
+    if tracker_payload and str(tracker_payload.get("event_type") or "").strip().lower() == "failure":
+        client_mac = to_lower_or_none(tracker_payload.get("mac"))
+        radio = to_lower_or_none(tracker_payload.get("vap"))
+        internal_event_ts = tracker_payload.get("auth_ts")
+        internal_event_ts_str = str(internal_event_ts) if internal_event_ts is not None else None
+        fields.update(
+            {
+                "event_type": "assoc_tracker_failure",
+                "client_mac": client_mac,
+                "mac": client_mac,
+                "radio": radio,
+                "process_name": "stahtd",
+                "event_category": "wifi_association",
+                "internal_event_ts": internal_event_ts_str,
+                "internal_event_ts_float": to_float_or_none(internal_event_ts_str),
+                "assoc_status": str(tracker_payload.get("assoc_status")) if tracker_payload.get("assoc_status") is not None else None,
+                "auth_failures": str(tracker_payload.get("auth_failures")) if tracker_payload.get("auth_failures") is not None else None,
+                "sta_tracker_event_id": str(tracker_payload.get("event_id")) if tracker_payload.get("event_id") is not None else None,
+                "tracker_message_type": tracker_payload.get("message_type"),
+            }
+        )
 
     if event_type == "dns_timeout" and not tracker_payload:
         match = DNS_TIMEOUT_DETAILS_RE.search(message)
@@ -789,6 +834,45 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                     "mac": client_mac,
                     "ap_mac": ap_mac,
                     "radio": match.group("radio").lower(),
+                }
+            )
+    if event_type == "fast_transition_roam":
+        match = FAST_TRANSITION_ROAM_DETAILS_RE.search(message)
+        if match:
+            client_mac = match.group("client_mac").lower()
+            fields.update(
+                {
+                    "ap_mac": match.group("ap_mac").lower(),
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": None,
+                }
+            )
+
+    if event_type == "dns_timeout":
+        match = WIRELESS_AGG_DNS_TIMEOUT_DETAILS_RE.search(message)
+        if match:
+            client_mac = match.group("client_mac").lower()
+            fields.update(
+                {
+                    "ap_mac": match.group("bssid").lower(),
+                    "bssid": match.group("bssid").lower(),
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": to_lower_or_none(match.group("radio")),
+                    "vap": to_lower_or_none(match.group("vap")),
+                    "satisfaction_now": to_int_or_none(match.group("satisfaction_now")),
+                }
+            )
+
+    if event_type == "device_config_report":
+        match = ACE_REPORTER_SAVE_CONFIG_DETAILS_RE.search(message)
+        if match:
+            fields.update(
+                {
+                    "process_name": "mcad",
+                    "config_key": match.group("config_key").strip(),
+                    "config_value": match.group("config_value").strip(),
                 }
             )
 

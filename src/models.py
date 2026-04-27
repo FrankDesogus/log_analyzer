@@ -64,6 +64,12 @@ class ParsedEvent:
     qos_map_support: Optional[int] = None
     idle_seconds: Optional[int] = None
     timeout_seconds: Optional[int] = None
+    vap: Optional[str] = None
+    satisfaction_now: Optional[int] = None
+    auth_failures: Optional[str] = None
+    sta_tracker_event_id: Optional[str] = None
+    config_key: Optional[str] = None
+    config_value: Optional[str] = None
     fine_duplicate_group_key: Optional[str] = None
     fine_duplicate_group_size: int = 1
     is_fine_duplicate_candidate: bool = False

@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 
 DEFAULT_MAX_GAP_MS = 15
-CORRELATION_STRATEGY = "source_ip+client_mac+radio+internal_event_ts_window"
+CORRELATION_STRATEGY = "source_ip+client_mac+radio_or_fallback+internal_event_ts_window"
 
 
 @dataclass
@@ -61,11 +61,14 @@ def build_canonical_events(events: list[dict[str, Any]], max_gap_ms: int = DEFAU
 
 
 def _group_identity(event: dict[str, Any]) -> tuple[str, str, str]:
-    return (
-        str(event.get("source_ip") or ""),
-        str(event.get("client_mac") or ""),
-        str(event.get("radio") or ""),
-    )
+    source_ip = str(event.get("source_ip") or "")
+    client_mac = str(event.get("client_mac") or "")
+    radio = str(event.get("radio") or "")
+    if client_mac and radio:
+        return (source_ip, client_mac, radio)
+    process_name = str(event.get("process_name") or "")
+    event_type = str(event.get("event_type") or "")
+    return (source_ip, f"fallback:{process_name}", f"fallback:{event_type}")
 
 
 def _event_sort_key(raw_index: int, event: dict[str, Any]) -> tuple[int, float, int]:
@@ -258,10 +261,13 @@ def _derive_canonical_event_type(event_types: set[str]) -> str:
     has_disconnect = "disconnect" in event_types
     has_eapol_key = any(event_type == "eapol_key" for event_type in event_types)
     has_assoc_flow = any(event_type in {"station_join", "assoc_success", "reassoc_response"} for event_type in event_types)
+    has_assoc_failure = "assoc_tracker_failure" in event_types
     has_roam_flow = any(
-        event_type in {"reassoc_request", "reassoc_response", "assoc_success", "reassoc_processing_time"}
+        event_type in {"reassoc_request", "reassoc_response", "assoc_success", "reassoc_processing_time", "fast_transition_roam"}
         for event_type in event_types
     )
+    has_dns_anomaly = "dns_timeout" in event_types
+    has_device_mgmt_report = "device_config_report" in event_types
     has_disconnect_flow = any(
         event_type in {"station_delete", "cfg80211_station_delete", "deauth_sent", "wifi_key_delete", "disconnect"}
         for event_type in event_types
@@ -271,10 +277,18 @@ def _derive_canonical_event_type(event_types: set[str]) -> str:
         return "wifi_auth_disconnect_sequence"
     if has_auth and has_disconnect_flow:
         return "wifi_auth_disconnect_sequence"
+    if has_assoc_failure and (has_auth or has_disconnect or has_disconnect_flow):
+        return "wifi_auth_disconnect_sequence"
+    if has_assoc_failure:
+        return "wifi_assoc_failure_sequence"
     if has_eapol_key:
         return "wifi_eapol_handshake_sequence"
     if has_roam_flow:
         return "wifi_roam_sequence"
+    if has_dns_anomaly:
+        return "network_dns_anomaly_sequence"
+    if has_device_mgmt_report:
+        return "device_management_sequence"
     if has_assoc_flow:
         return "wifi_association_sequence"
     if has_auth and not has_disconnect:
@@ -299,6 +313,10 @@ def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
     assoc_success_count = cluster.event_type_counts.get("assoc_success", 0)
     reassoc_request_count = cluster.event_type_counts.get("reassoc_request", 0)
     reassoc_response_count = cluster.event_type_counts.get("reassoc_response", 0)
+    fast_transition_roam_count = cluster.event_type_counts.get("fast_transition_roam", 0)
+    assoc_tracker_failure_count = cluster.event_type_counts.get("assoc_tracker_failure", 0)
+    dns_timeout_count = cluster.event_type_counts.get("dns_timeout", 0)
+    device_config_report_count = cluster.event_type_counts.get("device_config_report", 0)
 
     summary = {
         "auth_request_count": auth_request_count,
@@ -312,6 +330,10 @@ def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
         "assoc_success_count": assoc_success_count,
         "reassoc_request_count": reassoc_request_count,
         "reassoc_response_count": reassoc_response_count,
+        "fast_transition_roam_count": fast_transition_roam_count,
+        "assoc_tracker_failure_count": assoc_tracker_failure_count,
+        "dns_timeout_count": dns_timeout_count,
+        "device_config_report_count": device_config_report_count,
         "rssi_values": list(cluster.rssi_values),
         "rssi_min": min(cluster.rssi_values) if cluster.rssi_values else None,
         "rssi_max": max(cluster.rssi_values) if cluster.rssi_values else None,

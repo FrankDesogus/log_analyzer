@@ -67,7 +67,7 @@ class CanonicalCorrelationTests(unittest.TestCase):
         )
         self.assertEqual(
             canonical["correlation_strategy"],
-            "source_ip+client_mac+radio+internal_event_ts_window",
+            "source_ip+client_mac+radio_or_fallback+internal_event_ts_window",
         )
         self.assertEqual(canonical["sequence_summary"]["rssi_min"], -62)
         self.assertEqual(canonical["sequence_summary"]["rssi_max"], -55)
@@ -157,6 +157,52 @@ class CanonicalCorrelationTests(unittest.TestCase):
             payload["canonical_events"][0]["canonical_event_type"],
             "wifi_eapol_handshake_sequence",
         )
+
+    def test_new_event_families_map_to_expected_canonical_types(self) -> None:
+        payload = build_canonical_events(
+            [
+                {
+                    "line_number": 50,
+                    "source_ip": "10.0.0.50",
+                    "client_mac": "76:27:03:0e:78:15",
+                    "ap_mac": "0e:ea:14:a0:22:a7",
+                    "event_type": "fast_transition_roam",
+                    "event_category": "wifi_roam",
+                    "internal_event_ts_float": 2000.001,
+                },
+                {
+                    "line_number": 51,
+                    "source_ip": "10.0.0.51",
+                    "client_mac": "c4:82:e1:71:52:e0",
+                    "radio": "ra0",
+                    "event_type": "assoc_tracker_failure",
+                    "event_category": "wifi_association",
+                    "internal_event_ts_float": 3000.001,
+                },
+                {
+                    "line_number": 52,
+                    "source_ip": "10.0.0.52",
+                    "client_mac": "ac:f2:3c:00:18:b5",
+                    "radio": "rai0",
+                    "event_type": "dns_timeout",
+                    "event_category": "network_dns",
+                    "internal_event_ts_float": 4000.001,
+                },
+                {
+                    "line_number": 53,
+                    "source_ip": "10.0.0.53",
+                    "event_type": "device_config_report",
+                    "event_category": "device_management",
+                    "process_name": "mcad",
+                    "internal_event_ts_float": 5000.001,
+                },
+            ]
+        )
+        canonical_types = {event["canonical_event_type"] for event in payload["canonical_events"]}
+        self.assertIn("wifi_roam_sequence", canonical_types)
+        self.assertIn("wifi_assoc_failure_sequence", canonical_types)
+        self.assertIn("network_dns_anomaly_sequence", canonical_types)
+        self.assertIn("device_management_sequence", canonical_types)
 
 
 if __name__ == "__main__":
