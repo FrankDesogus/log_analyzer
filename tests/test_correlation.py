@@ -424,6 +424,37 @@ class CanonicalCorrelationTests(unittest.TestCase):
         self.assertIn("wifi_auth_disconnect_sequence", canonical_types)
         self.assertIn("wifi_assoc_failure_sequence", canonical_types)
 
+    def test_disconnect_only_flow_uses_tighter_time_window(self) -> None:
+        payload = build_canonical_events(
+            [
+                {
+                    "line_number": 110,
+                    "source_ip": "10.0.0.70",
+                    "client_mac": "76:27:03:0e:78:15",
+                    "radio": "rai2",
+                    "event_type": "disconnect",
+                    "event_category": "wifi_disconnect",
+                    "normalized_timestamp": "2026-04-23T12:00:00",
+                },
+                {
+                    "line_number": 111,
+                    "source_ip": "10.0.0.70",
+                    "client_mac": "76:27:03:0e:78:15",
+                    "radio": "rai2",
+                    "event_type": "disconnect",
+                    "event_category": "wifi_disconnect",
+                    "normalized_timestamp": "2026-04-23T12:00:02",
+                },
+            ]
+        )
+        self.assertEqual(len(payload["canonical_events"]), 2)
+        self.assertTrue(
+            all(
+                event["canonical_event_type"] == "wifi_disconnect_sequence"
+                for event in payload["canonical_events"]
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

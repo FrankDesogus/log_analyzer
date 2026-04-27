@@ -136,6 +136,14 @@ UNIFI_CEF_CONFIG_AUDIT_RE = re.compile(
     r"\bCEF:0\|Ubiquiti\|UniFi Network\|[^\n]*\|Config Modified\|",
     re.IGNORECASE,
 )
+UNIFI_SETTINGS_AUDIT_RE = re.compile(
+    r"\bUNIFIsettingsSection=\S+.*\bUNIFIsettingsEntry=\S+.*\bmade a change to in \S+ settings\b",
+    re.IGNORECASE,
+)
+SYSTEM_STATE_LOCK_WARNING_RE = re.compile(
+    r"(?:Failed to lock /var/run/system\.state\.lock|\[state is locked\]\s*skipping reload)",
+    re.IGNORECASE,
+)
 DNS_BUFFER_ERROR_RE = re.compile(
     r"\[STA_TRACKER\]\s*DNS buffer error:\s*flags\s+\d+\b",
     re.IGNORECASE,
@@ -246,6 +254,10 @@ def classify_event_type(message: str) -> Optional[str]:
         return "device_config_version_change"
     if UNIFI_CEF_CONFIG_AUDIT_RE.search(message):
         return "unifi_config_audit"
+    if UNIFI_SETTINGS_AUDIT_RE.search(message):
+        return "unifi_config_audit"
+    if SYSTEM_STATE_LOCK_WARNING_RE.search(message):
+        return "system_state_lock_warning"
     if DNS_BUFFER_ERROR_RE.search(message):
         return "dns_buffer_error"
     if WIFI_TX_RETRY_BURST_RE.search(message):
@@ -313,6 +325,8 @@ def classify_event_category(
         return "device_management"
     if event_type in {"device_config_version_change", "unifi_config_audit"}:
         return "device_config"
+    if event_type == "system_state_lock_warning":
+        return "system_maintenance"
     if event_type in {"cfg80211_assoc_request_handler", "driver_missing_station_entry", "station_table_insert", "station_table_delete", "driver_queue_flush"}:
         return "wifi_driver"
     if event_type == "radius_accounting_start":
