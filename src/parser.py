@@ -59,6 +59,26 @@ MAC_PATTERN_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b")
 IP_PATTERN_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 KERNEL_TS_PATTERN_RE = re.compile(r"\[\d+\.\d+\]")
 LONG_NUM_PATTERN_RE = re.compile(r"\b\d{4,}\b")
+DNS_TIMEOUT_DETAILS_RE = re.compile(
+    r"\[STA:\s*(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\]"
+    r"\[QUERY:\s*(?P<query>[^\]]+)\]\s*"
+    r"\[DNS_SERVER\s*:(?P<dns_server>[^\]]+)\]\s*"
+    r"\[TXN_ID\s+(?P<transaction_id>[^\]]+)\]\s*"
+    r"\[SRCPORT\s+(?P<source_port>\d+)\]",
+    re.IGNORECASE,
+)
+DROP_CACHES_DETAILS_RE = re.compile(
+    r"(?:^|\]\s+)(?P<process_name>[A-Za-z_][A-Za-z0-9_-]*)\s*\((?P<pid>\d+)\):\s*drop_caches:\s*(?P<drop_value>\d+)\b",
+    re.IGNORECASE,
+)
+CFG80211_STA_DEL_BSSID_RE = re.compile(
+    r"CFG80211_OpsStaDel\s*==>\s*for bssid\s*\((?P<bssid>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\)",
+    re.IGNORECASE,
+)
+EAP_PACKET_DETAILS_RE = re.compile(
+    r"EAP Packet\s+PortSecure:\s*(?P<port_secure>\d+),\s*bClearFrame\s+(?P<clear_frame>\d+)",
+    re.IGNORECASE,
+)
 
 
 def parse_line(line: str) -> Optional[ParsedEvent]:
@@ -83,6 +103,14 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
     internal_event_ts = extract_internal_event_ts(message)
     internal_event_ts_float = to_float_or_none(internal_event_ts)
     timestamp = f'{data["month"]} {data["day"]} {data["time"]}'
+    additional_fields = extract_additional_event_fields(message, event_type)
+
+    if "client_mac" in additional_fields:
+        client_mac = additional_fields["client_mac"]
+    if "process_name" in additional_fields:
+        process_name = additional_fields["process_name"]
+    if "process" in additional_fields:
+        process = additional_fields["process"]
 
     return ParsedEvent(
         parse_status="parsed",
@@ -107,6 +135,15 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         internal_event_ts_float=internal_event_ts_float,
         internal_event_bucket=build_internal_event_bucket(internal_event_ts_float),
         raw_line=stripped_line,
+        query=additional_fields.get("query"),
+        dns_server=additional_fields.get("dns_server"),
+        transaction_id=additional_fields.get("transaction_id"),
+        source_port=additional_fields.get("source_port"),
+        error_type=additional_fields.get("error_type"),
+        drop_caches_value=additional_fields.get("drop_caches_value"),
+        bssid=additional_fields.get("bssid"),
+        port_secure=additional_fields.get("port_secure"),
+        clear_frame=additional_fields.get("clear_frame"),
     )
 
 
@@ -193,6 +230,7 @@ def build_parser_report(
 ) -> dict[str, Any]:
     parse_status_counts = Counter((event.get("parse_status") or "unknown") for event in parsed_events)
     event_type_counts = Counter((event.get("event_type") or "unknown") for event in parsed_events)
+    event_category_counts = Counter((event.get("event_category") or "unknown") for event in parsed_events)
     canonical_event_type_counts = Counter(
         (event.get("canonical_event_type") or "unknown") for event in canonical_events
     )
@@ -207,6 +245,7 @@ def build_parser_report(
         "total_canonical_events": len(canonical_events),
         "parse_status_counts": dict(parse_status_counts),
         "event_type_counts": dict(event_type_counts),
+        "event_category_counts": dict(event_category_counts),
         "canonical_event_type_counts": dict(canonical_event_type_counts),
         "correlation_summary": {
             "duplicate_candidates": duplicate_candidates,
@@ -484,3 +523,64 @@ def build_internal_event_bucket(
     bucket_start = math.floor(internal_event_ts_float / bucket_seconds) * bucket_seconds
     decimals = _bucket_decimal_places(bucket_ms)
     return f"{bucket_start:.{decimals}f}"
+
+
+def extract_additional_event_fields(message: str, event_type: Optional[str]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+
+    if event_type == "dns_timeout":
+        match = DNS_TIMEOUT_DETAILS_RE.search(message)
+        if match:
+            source_port = to_int_or_none(match.group("source_port"))
+            client_mac = match.group("client_mac")
+            fields.update(
+                {
+                    "client_mac": client_mac.lower() if client_mac else None,
+                    "query": match.group("query"),
+                    "dns_server": match.group("dns_server"),
+                    "transaction_id": match.group("transaction_id"),
+                    "source_port": source_port,
+                }
+            )
+
+    if event_type == "wifi_scan_error":
+        fields["error_type"] = "invalid_bss_entry"
+
+    if event_type == "system_cache_drop":
+        match = DROP_CACHES_DETAILS_RE.search(message)
+        if match:
+            process_name = match.group("process_name")
+            pid = to_int_or_none(match.group("pid"))
+            fields.update(
+                {
+                    "process_name": process_name,
+                    "process": f"{process_name}({pid})" if pid is not None else process_name,
+                    "drop_caches_value": to_int_or_none(match.group("drop_value")),
+                }
+            )
+
+    if event_type == "cfg80211_station_delete_start":
+        match = CFG80211_STA_DEL_BSSID_RE.search(message)
+        if match:
+            fields["bssid"] = match.group("bssid").lower()
+
+    if event_type == "eap_packet":
+        match = EAP_PACKET_DETAILS_RE.search(message)
+        if match:
+            fields.update(
+                {
+                    "port_secure": to_int_or_none(match.group("port_secure")),
+                    "clear_frame": to_int_or_none(match.group("clear_frame")),
+                }
+            )
+
+    return fields
+
+
+def to_int_or_none(value: Optional[str]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None

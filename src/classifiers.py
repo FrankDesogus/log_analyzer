@@ -21,6 +21,15 @@ SYSTEM_EVENT_RE = re.compile(
     r"\b(?:kernel|systemd|cron|dhcp|ntp|dns|firewall|boot|service)\b",
     re.IGNORECASE,
 )
+DNS_TIMEOUT_RE = re.compile(r"\bDNS request timed out\b", re.IGNORECASE)
+WIFI_SCAN_SANITY_FAILED_RE = re.compile(
+    r"\bubnt_get_scan_result:\s*sanity check failed,\s*invalid BssEntry\b",
+    re.IGNORECASE,
+)
+DROP_CACHES_RE = re.compile(r"\bdrop_caches:\s*\d+\b", re.IGNORECASE)
+CFG80211_STA_DEL_START_RE = re.compile(r"CFG80211_OpsStaDel\s*==>", re.IGNORECASE)
+CFG80211_STA_DEL_END_RE = re.compile(r"CFG80211_OpsStaDel\s*<==", re.IGNORECASE)
+EAP_PACKET_RE = re.compile(r"\bRTMPCheckEtherType\(\)\s*==>\s*EAP Packet\b", re.IGNORECASE)
 
 
 def classify_event_type(message: str) -> Optional[str]:
@@ -33,6 +42,18 @@ def classify_event_type(message: str) -> Optional[str]:
         return "auth_request"
     if SEND_AUTH_RSP_RE.search(message):
         return "auth_response"
+    if DNS_TIMEOUT_RE.search(message):
+        return "dns_timeout"
+    if WIFI_SCAN_SANITY_FAILED_RE.search(message):
+        return "wifi_scan_error"
+    if DROP_CACHES_RE.search(message):
+        return "system_cache_drop"
+    if CFG80211_STA_DEL_START_RE.search(message):
+        return "cfg80211_station_delete_start"
+    if CFG80211_STA_DEL_END_RE.search(message):
+        return "cfg80211_station_delete_end"
+    if EAP_PACKET_RE.search(message):
+        return "eap_packet"
     return None
 
 
@@ -43,6 +64,16 @@ def classify_event_category(
 ) -> str:
     """Map event_type/message/process_name to a broader event category."""
     if event_type in {"auth_request", "auth_response"}:
+        return "wifi_auth"
+    if event_type == "dns_timeout":
+        return "network_dns"
+    if event_type == "wifi_scan_error":
+        return "wifi_system"
+    if event_type == "system_cache_drop":
+        return "system_maintenance"
+    if event_type in {"cfg80211_station_delete_start", "cfg80211_station_delete_end"}:
+        return "wifi_driver"
+    if event_type == "eap_packet":
         return "wifi_auth"
     if event_type == "disconnect":
         return "wifi_disconnect"

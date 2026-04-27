@@ -65,6 +65,50 @@ class UnknownOutputsTests(unittest.TestCase):
                 "unknown_summary.json",
             )
 
+    def test_new_patterns_are_not_exported_as_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp)
+            input_path = base_path / "in.log"
+            parsed_path = base_path / "parsed_events.json"
+            canonical_path = base_path / "canonical_events.json"
+            report_path = base_path / "parser_report.json"
+            unknown_events_path = base_path / "unknown_events.json"
+            unknown_summary_path = base_path / "unknown_summary.json"
+
+            input_path.write_text(
+                "\n".join(
+                    [
+                        "10.0.0.1 Apr 23 12:00:00 ap01 daemon info kernel: [773256.261912] [STA_TRACKER] DNS request timed out; [STA: ac:f2:3c:00:18:b5][QUERY: teams.microsoft.com.] [DNS_SERVER :10.10.241.10] [TXN_ID a383] [SRCPORT 50607]",
+                        "10.0.0.1 Apr 23 12:00:01 ap01 daemon info kernel: [772878.601432] ubnt_get_scan_result: sanity check failed, invalid BssEntry",
+                        "10.0.0.1 Apr 23 12:00:02 ap01 daemon info kernel: [773521.070054] sh (25922): drop_caches: 3",
+                        "10.0.0.1 Apr 23 12:00:03 ap01 daemon info kernel: [772920.705502] 80211> CFG80211_OpsStaDel ==> for bssid (0E:EA:14:AF:96:A5)",
+                        "10.0.0.1 Apr 23 12:00:04 ap01 daemon info kernel: [772920.705607] 80211> CFG80211_OpsStaDel <==",
+                        "10.0.0.1 Apr 23 12:00:05 ap01 daemon info kernel: [772918.075520] RTMPCheckEtherType() ==> EAP Packet PortSecure: 2, bClearFrame 1",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            parser.parse_file(
+                input_path,
+                parsed_path,
+                canonical_output_path=canonical_path,
+                parser_report_output_path=report_path,
+                unknown_events_output_path=unknown_events_path,
+                unknown_summary_output_path=unknown_summary_path,
+            )
+
+            unknown_events = json.loads(unknown_events_path.read_text(encoding="utf-8"))
+            unknown_summary = json.loads(unknown_summary_path.read_text(encoding="utf-8"))
+            parser_report = json.loads(report_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(unknown_events, [])
+            self.assertEqual(unknown_summary["total_unknown_events"], 0)
+            self.assertEqual(parser_report["unknown_event_count"], 0)
+            self.assertEqual(parser_report["unknown_events_exported_count"], 0)
+            self.assertIn("event_category_counts", parser_report)
+
 
 if __name__ == "__main__":
     unittest.main()

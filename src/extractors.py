@@ -10,6 +10,7 @@ RA_RE = re.compile(r"\bRA:\[([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\]")
 RECV_AUTH_REQ_RE = re.compile(r"\[recv\s+auth_req\]", re.IGNORECASE)
 SEND_AUTH_RSP_RE = re.compile(r"\[send\s+auth_rsp\]", re.IGNORECASE)
 DISCONNECT_MARKER_RE = re.compile(r"\b(?:EVENT_STA_LEAVE|STA_LEAVE|disassociated)\b", re.IGNORECASE)
+DNS_TIMEOUT_STA_RE = re.compile(r"\[STA:\s*([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\]", re.IGNORECASE)
 PROCESS_TOKEN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*)(?:\[\d+\])?$")
 MESSAGE_PROCESS_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)\[\d+\]:")
 
@@ -85,6 +86,11 @@ def extract_client_ap_mac(message: str, current_mac: Optional[str]) -> tuple[Opt
 
     if DISCONNECT_MARKER_RE.search(message):
         client_mac = extract_mac(message)
+        return client_mac, None, client_mac
+
+    dns_sta_match = DNS_TIMEOUT_STA_RE.search(message)
+    if dns_sta_match:
+        client_mac = dns_sta_match.group(1).lower()
         return client_mac, None, client_mac
 
     return None, None, current_mac

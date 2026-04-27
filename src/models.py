@@ -30,6 +30,15 @@ class ParsedEvent:
     internal_event_ts: Optional[str] = None
     internal_event_ts_float: Optional[float] = None
     internal_event_bucket: Optional[str] = None
+    query: Optional[str] = None
+    dns_server: Optional[str] = None
+    transaction_id: Optional[str] = None
+    source_port: Optional[int] = None
+    error_type: Optional[str] = None
+    drop_caches_value: Optional[int] = None
+    bssid: Optional[str] = None
+    port_secure: Optional[int] = None
+    clear_frame: Optional[int] = None
     fine_duplicate_group_key: Optional[str] = None
     fine_duplicate_group_size: int = 1
     is_fine_duplicate_candidate: bool = False
