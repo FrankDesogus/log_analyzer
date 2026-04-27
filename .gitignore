@@ -1,0 +1,19 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual env
+.venv/
+venv/
+
+# Log / raw data / output
+data/raw/
+*.log
+parser_report.json
+unknown_events.json
+unknown_summary.json
+
+# IDE
+.idea/
+.vscode/
