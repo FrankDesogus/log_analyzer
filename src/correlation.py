@@ -5,10 +5,8 @@ from datetime import datetime
 from typing import Any, Optional
 
 
-INTERNAL_TS_MAX_GAP_SECONDS = 1.5
-MIXED_TS_MAX_LINE_GAP = 3
-NORMALIZED_TS_MAX_LINE_GAP = 2
-WIFI_SEQUENCE_TYPES = {"auth_request", "auth_response", "disconnect"}
+DEFAULT_MAX_GAP_MS = 15
+CORRELATION_STRATEGY = "source_ip+client_mac+radio+internal_event_ts_window"
 
 
 @dataclass
@@ -21,41 +19,35 @@ class _ClusterState:
     raw_indexes: list[int] = field(default_factory=list)
     raw_line_numbers: list[int] = field(default_factory=list)
     event_types: set[str] = field(default_factory=set)
+    event_type_counts: dict[str, int] = field(default_factory=dict)
     event_categories: set[str] = field(default_factory=set)
     process_names: set[str] = field(default_factory=set)
     sources_seen: set[str] = field(default_factory=set)
     first_normalized_timestamp: Optional[str] = None
     first_internal_event_ts: Optional[float] = None
     last_internal_event_ts: Optional[float] = None
-    last_internal_event_ts_for_gap: Optional[float] = None
-    last_normalized_epoch_for_gap: Optional[float] = None
-    last_line_number_for_gap: Optional[int] = None
+    first_sort_ts: Optional[float] = None
+    last_sort_ts: Optional[float] = None
+    rssi_values: list[int] = field(default_factory=list)
 
 
-def build_canonical_events(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Build conservative canonical correlated events without altering raw records."""
+def build_canonical_events(events: list[dict[str, Any]], max_gap_ms: int = DEFAULT_MAX_GAP_MS) -> dict[str, list[dict[str, Any]]]:
+    """Build canonical SIEM-like WiFi sequences from normalized raw events.
+
+    Raw events are kept untouched and returned as-is in `raw_events`.
+    """
+    identity_groups: dict[tuple[str, str, str], list[tuple[int, dict[str, Any]]]] = {}
+
+    for raw_index, event in enumerate(events):
+        identity = _group_identity(event)
+        identity_groups.setdefault(identity, []).append((raw_index, event))
+
     clusters: list[_ClusterState] = []
+    for group_events in identity_groups.values():
+        sorted_group = sorted(group_events, key=lambda item: _event_sort_key(item[0], item[1]))
+        clusters.extend(_build_group_clusters(sorted_group, max_gap_ms=max_gap_ms))
 
-    indexed_events: list[tuple[int, dict[str, Any]]] = list(enumerate(events))
-    indexed_events.sort(key=lambda item: _sort_key(item[0], item[1]))
-
-    for raw_index, event in indexed_events:
-        attached = False
-        for cluster in reversed(clusters):
-            if not _same_identity(cluster, event):
-                continue
-            if not _is_event_compatible(cluster, event):
-                continue
-            if not _within_time_window(cluster, event):
-                continue
-
-            _add_event_to_cluster(cluster, raw_index, event)
-            attached = True
-            break
-
-        if not attached:
-            cluster = _new_cluster(raw_index, event)
-            clusters.append(cluster)
+    clusters.sort(key=lambda cluster: _cluster_sort_key(cluster))
 
     canonical_events = [
         _cluster_to_canonical_event(cluster, canonical_index)
@@ -68,72 +60,79 @@ def build_canonical_events(events: list[dict[str, Any]]) -> dict[str, list[dict[
     }
 
 
-def _sort_key(raw_index: int, event: dict[str, Any]) -> tuple[str, str, str, int, float, int]:
-    source_ip = event.get("source_ip") or ""
-    client_mac = event.get("client_mac") or ""
-    radio = event.get("radio") or ""
-
-    internal_ts = event.get("internal_event_ts_float")
-    normalized_epoch = _normalized_ts_to_epoch(event.get("normalized_timestamp"))
-
-    if internal_ts is not None:
-        order_class = 0
-        ts_value = float(internal_ts)
-    elif normalized_epoch is not None:
-        order_class = 1
-        ts_value = normalized_epoch
-    else:
-        order_class = 2
-        ts_value = float(raw_index)
-
-    return (source_ip, client_mac, radio, order_class, ts_value, raw_index)
-
-
-def _same_identity(cluster: _ClusterState, event: dict[str, Any]) -> bool:
+def _group_identity(event: dict[str, Any]) -> tuple[str, str, str]:
     return (
-        cluster.source_ip == event.get("source_ip")
-        and cluster.client_mac == event.get("client_mac")
-        and cluster.radio == event.get("radio")
+        str(event.get("source_ip") or ""),
+        str(event.get("client_mac") or ""),
+        str(event.get("radio") or ""),
     )
 
 
-def _is_event_compatible(cluster: _ClusterState, event: dict[str, Any]) -> bool:
-    event_type = event.get("event_type")
-    if not cluster.event_types:
+def _event_sort_key(raw_index: int, event: dict[str, Any]) -> tuple[int, float, int]:
+    ts = _event_sort_ts(event)
+    if ts is None:
+        return (2, float(raw_index), raw_index)
+
+    if event.get("internal_event_ts_float") is not None:
+        return (0, ts, raw_index)
+
+    return (1, ts, raw_index)
+
+
+def _event_sort_ts(event: dict[str, Any]) -> Optional[float]:
+    internal_ts = _to_float_or_none(event.get("internal_event_ts_float"))
+    if internal_ts is not None:
+        return internal_ts
+
+    return _normalized_ts_to_epoch(event.get("normalized_timestamp"))
+
+
+def _build_group_clusters(
+    sorted_group_events: list[tuple[int, dict[str, Any]]],
+    max_gap_ms: int,
+) -> list[_ClusterState]:
+    clusters: list[_ClusterState] = []
+    active_cluster: Optional[_ClusterState] = None
+
+    for raw_index, event in sorted_group_events:
+        if active_cluster is None:
+            active_cluster = _new_cluster(raw_index, event)
+            continue
+
+        if _can_attach_to_cluster(active_cluster, event, max_gap_ms=max_gap_ms):
+            _add_event_to_cluster(active_cluster, raw_index, event)
+            continue
+
+        clusters.append(active_cluster)
+        active_cluster = _new_cluster(raw_index, event)
+
+    if active_cluster is not None:
+        clusters.append(active_cluster)
+
+    return clusters
+
+
+def _can_attach_to_cluster(cluster: _ClusterState, event: dict[str, Any], max_gap_ms: int) -> bool:
+    cluster_last_ts = cluster.last_sort_ts
+    event_ts = _event_sort_ts(event)
+
+    # Nessun riferimento temporale affidabile: separazione prudente.
+    if cluster_last_ts is None or event_ts is None:
+        return False
+
+    gap_seconds = abs(event_ts - cluster_last_ts)
+    if gap_seconds * 1000 <= max_gap_ms:
         return True
 
-    if event_type is None:
-        return True
+    # Fallback prudente quando manca internal_event_ts_float sul nuovo evento:
+    # consenti accorpamento solo in caso di allineamento quasi perfetto sul timestamp normalizzato.
+    if event.get("internal_event_ts_float") is None:
+        cluster_norm = cluster.first_normalized_timestamp
+        event_norm = event.get("normalized_timestamp")
+        if cluster_norm and event_norm and cluster_norm == event_norm and gap_seconds <= 0.001:
+            return True
 
-    if event_type in WIFI_SEQUENCE_TYPES:
-        return all(t in WIFI_SEQUENCE_TYPES for t in cluster.event_types)
-
-    return event_type in cluster.event_types
-
-
-def _within_time_window(cluster: _ClusterState, event: dict[str, Any]) -> bool:
-    current_internal = event.get("internal_event_ts_float")
-    current_line = event.get("line_number")
-    current_normalized = _normalized_ts_to_epoch(event.get("normalized_timestamp"))
-
-    if cluster.last_internal_event_ts_for_gap is not None and current_internal is not None:
-        return abs(float(current_internal) - cluster.last_internal_event_ts_for_gap) <= INTERNAL_TS_MAX_GAP_SECONDS
-
-    if cluster.last_internal_event_ts_for_gap is not None or current_internal is not None:
-        if current_line is None or cluster.last_line_number_for_gap is None:
-            return False
-        return abs(int(current_line) - cluster.last_line_number_for_gap) <= MIXED_TS_MAX_LINE_GAP
-
-    if cluster.last_normalized_epoch_for_gap is None or current_normalized is None:
-        return False
-
-    if int(cluster.last_normalized_epoch_for_gap) != int(current_normalized):
-        return False
-
-    if current_line is None or cluster.last_line_number_for_gap is None:
-        return False
-
-    return abs(int(current_line) - cluster.last_line_number_for_gap) <= NORMALIZED_TS_MAX_LINE_GAP
+    return False
 
 
 def _new_cluster(raw_index: int, event: dict[str, Any]) -> _ClusterState:
@@ -148,6 +147,7 @@ def _new_cluster(raw_index: int, event: dict[str, Any]) -> _ClusterState:
 
 def _add_event_to_cluster(cluster: _ClusterState, raw_index: int, event: dict[str, Any]) -> None:
     cluster.raw_indexes.append(raw_index)
+
     line_number = event.get("line_number")
     if line_number is not None:
         cluster.raw_line_numbers.append(int(line_number))
@@ -159,39 +159,48 @@ def _add_event_to_cluster(cluster: _ClusterState, raw_index: int, event: dict[st
 
     event_type = event.get("event_type")
     if event_type:
-        cluster.event_types.add(event_type)
+        event_type_str = str(event_type)
+        cluster.event_types.add(event_type_str)
+        cluster.event_type_counts[event_type_str] = cluster.event_type_counts.get(event_type_str, 0) + 1
 
     event_category = event.get("event_category")
     if event_category:
-        cluster.event_categories.add(event_category)
+        cluster.event_categories.add(str(event_category))
 
     process_name = event.get("process_name")
     if process_name:
-        cluster.process_names.add(process_name)
+        cluster.process_names.add(str(process_name))
 
     process = event.get("process")
     if process:
-        cluster.sources_seen.add(process)
+        cluster.sources_seen.add(str(process))
 
     normalized_timestamp = event.get("normalized_timestamp")
     if cluster.first_normalized_timestamp is None and normalized_timestamp is not None:
-        cluster.first_normalized_timestamp = normalized_timestamp
+        cluster.first_normalized_timestamp = str(normalized_timestamp)
 
-    internal_ts = event.get("internal_event_ts_float")
+    internal_ts = _to_float_or_none(event.get("internal_event_ts_float"))
     if internal_ts is not None:
-        internal_ts_float = float(internal_ts)
-        if cluster.first_internal_event_ts is None or internal_ts_float < cluster.first_internal_event_ts:
-            cluster.first_internal_event_ts = internal_ts_float
-        if cluster.last_internal_event_ts is None or internal_ts_float > cluster.last_internal_event_ts:
-            cluster.last_internal_event_ts = internal_ts_float
-        cluster.last_internal_event_ts_for_gap = internal_ts_float
+        if cluster.first_internal_event_ts is None or internal_ts < cluster.first_internal_event_ts:
+            cluster.first_internal_event_ts = internal_ts
+        if cluster.last_internal_event_ts is None or internal_ts > cluster.last_internal_event_ts:
+            cluster.last_internal_event_ts = internal_ts
 
-    normalized_epoch = _normalized_ts_to_epoch(normalized_timestamp)
-    if normalized_epoch is not None:
-        cluster.last_normalized_epoch_for_gap = normalized_epoch
+    event_sort_ts = _event_sort_ts(event)
+    if event_sort_ts is not None:
+        if cluster.first_sort_ts is None:
+            cluster.first_sort_ts = event_sort_ts
+        cluster.last_sort_ts = event_sort_ts
 
-    if line_number is not None:
-        cluster.last_line_number_for_gap = int(line_number)
+    rssi_value = _to_int_or_none(event.get("rssi"))
+    if rssi_value is not None:
+        cluster.rssi_values.append(rssi_value)
+
+
+def _cluster_sort_key(cluster: _ClusterState) -> tuple[int, float, int]:
+    if cluster.first_sort_ts is not None:
+        return (0, cluster.first_sort_ts, cluster.raw_indexes[0])
+    return (1, float(cluster.raw_indexes[0]), cluster.raw_indexes[0])
 
 
 def _cluster_to_canonical_event(cluster: _ClusterState, canonical_index: int) -> dict[str, Any]:
@@ -199,8 +208,13 @@ def _cluster_to_canonical_event(cluster: _ClusterState, canonical_index: int) ->
     if cluster.first_internal_event_ts is not None and cluster.last_internal_event_ts is not None:
         duration_ms = int(round((cluster.last_internal_event_ts - cluster.first_internal_event_ts) * 1000))
 
+    event_types_seen = sorted(cluster.event_types)
+    sequence_summary = _build_sequence_summary(cluster)
+
     return {
-        "canonical_event_id": f"ce-{canonical_index:06d}",
+        "canonical_event_id": _build_canonical_event_id(cluster, canonical_index),
+        "canonical_event_type": _derive_canonical_event_type(cluster.event_types),
+        "correlation_strategy": CORRELATION_STRATEGY,
         "source_ip": cluster.source_ip,
         "host": cluster.host,
         "client_mac": cluster.client_mac,
@@ -213,17 +227,27 @@ def _cluster_to_canonical_event(cluster: _ClusterState, canonical_index: int) ->
         "raw_event_count": len(cluster.raw_indexes),
         "raw_line_numbers": sorted(cluster.raw_line_numbers),
         "raw_event_indexes": cluster.raw_indexes,
-        "event_types_seen": sorted(cluster.event_types),
+        "event_types_seen": event_types_seen,
         "event_categories_seen": sorted(cluster.event_categories),
         "process_names_seen": sorted(cluster.process_names),
         "sources_seen": sorted(cluster.sources_seen),
-        "correlation_strategy": {
-            "name": "conservative_v1",
-            "identity_fields": ["source_ip", "client_mac", "radio"],
-            "time_priority": "internal_event_ts_float",
-        },
-        "canonical_event_type": _derive_canonical_event_type(cluster.event_types),
+        "sequence_summary": sequence_summary,
     }
+
+
+def _build_canonical_event_id(cluster: _ClusterState, canonical_index: int) -> str:
+    source_ip = (cluster.source_ip or "unknown").replace(":", "")
+    client_mac = (cluster.client_mac or "unknown").replace(":", "")
+    radio = cluster.radio or "unknown"
+
+    if cluster.first_internal_event_ts is not None:
+        first_ts = str(int(round(cluster.first_internal_event_ts * 1000)))
+    elif cluster.first_sort_ts is not None:
+        first_ts = str(int(round(cluster.first_sort_ts * 1000)))
+    else:
+        first_ts = f"idx{canonical_index}"
+
+    return f"canon-{source_ip}-{client_mac}-{radio}-{first_ts}"
 
 
 def _derive_canonical_event_type(event_types: set[str]) -> str:
@@ -235,22 +259,54 @@ def _derive_canonical_event_type(event_types: set[str]) -> str:
 
     if has_auth and has_disconnect:
         return "wifi_auth_disconnect_sequence"
-    if has_auth:
+    if has_auth and not has_disconnect:
         return "wifi_auth_sequence"
-    if has_disconnect:
+    if has_disconnect and event_types.issubset({"disconnect"}):
         return "wifi_disconnect_sequence"
 
-    if len(event_types) == 1:
-        only_type = next(iter(event_types))
-        return f"wifi_{only_type}_sequence"
+    return "wifi_unknown_sequence"
 
-    return "wifi_mixed_sequence"
+
+def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
+    auth_request_count = cluster.event_type_counts.get("auth_request", 0)
+    auth_response_count = cluster.event_type_counts.get("auth_response", 0)
+    disconnect_count = cluster.event_type_counts.get("disconnect", 0)
+
+    summary = {
+        "auth_request_count": auth_request_count,
+        "auth_response_count": auth_response_count,
+        "disconnect_count": disconnect_count,
+        "rssi_values": list(cluster.rssi_values),
+        "rssi_min": min(cluster.rssi_values) if cluster.rssi_values else None,
+        "rssi_max": max(cluster.rssi_values) if cluster.rssi_values else None,
+        "rssi_avg": (sum(cluster.rssi_values) / len(cluster.rssi_values)) if cluster.rssi_values else None,
+    }
+    return summary
 
 
 def _normalized_ts_to_epoch(value: Optional[str]) -> Optional[float]:
     if not value:
         return None
+
     try:
         return datetime.fromisoformat(value).timestamp()
     except ValueError:
+        return None
+
+
+def _to_float_or_none(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int_or_none(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
         return None

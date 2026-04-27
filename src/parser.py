@@ -85,14 +85,28 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
     )
 
 
-def parse_file(input_path: Path, output_path: Path) -> None:
+def parse_file(
+    input_path: Path,
+    output_path: Path,
+    canonical_output_path: Optional[Path] = None,
+) -> None:
     parsed_events = parse_file_to_events(input_path)
 
     with output_path.open("w", encoding="utf-8") as file_out:
         json.dump(parsed_events, file_out, indent=2, ensure_ascii=False)
 
     print(f"Lette {len(parsed_events)} righe.")
-    print(f"Output scritto in: {output_path}")
+    print(f"Output raw scritto in: {output_path}")
+
+    if canonical_output_path is None:
+        return
+
+    correlated_payload = build_canonical_events(parsed_events)
+    with canonical_output_path.open("w", encoding="utf-8") as file_out:
+        json.dump(correlated_payload, file_out, indent=2, ensure_ascii=False)
+
+    print(f"Eventi canonici prodotti: {len(correlated_payload['canonical_events'])}")
+    print(f"Output canonico scritto in: {canonical_output_path}")
 
 
 def parse_file_with_canonical_events(input_path: Path, output_path: Path) -> None:
