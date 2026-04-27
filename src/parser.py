@@ -152,6 +152,30 @@ ACE_REPORTER_SAVE_CONFIG_DETAILS_RE = re.compile(
     r"ace_reporter\.reporter_save_config\(\):\s*(?P<config_key>[^:]+):\s*(?P<config_value>.+)$",
     re.IGNORECASE,
 )
+CLIENT_IP_EVENT_RE = re.compile(
+    r"\b(?:EVENT_STA_IP|STA_IP)\b.*?\b(?:ip|IP)\s*[:=]\s*(?P<client_ip>(?:\d{1,3}\.){3}\d{1,3})",
+    re.IGNORECASE,
+)
+CLIENT_ASSOCIATED_RE = re.compile(
+    r"(?:(?P<radio>ra(?:i|x)?\d+):\s*)?.*?\bSTA\b(?:\s+MAC)?\s*(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}).*?\bassociated\b",
+    re.IGNORECASE,
+)
+CLIENT_JOIN_RE = re.compile(
+    r"\bEVENT_STA_JOIN\b(?:.*?(?P<radio>ra(?:i|x)?\d+))?(?:.*?(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}))?",
+    re.IGNORECASE,
+)
+HANDSHAKE_COMPLETED_RE = re.compile(
+    r"(?:(?P<radio>ra(?:i|x)?\d+):\s*)?.*?\b(?:pairwise key handshake completed|handshake completed)\b(?:.*?(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}))?",
+    re.IGNORECASE,
+)
+LINK_EVENT_DETAILS_RE = re.compile(
+    r"(?P<interface>[A-Za-z0-9_.:-]+)(?:\s+port\s+(?P<port>\d+))?:\s*(?P<link_token>LINK-[A-Z]-(?:Up|Down)|link(?:\s+has\s+become)?\s+(?:up|down))\b",
+    re.IGNORECASE,
+)
+CONFIG_SETPARAM_DETAILS_RE = re.compile(
+    r"\bsetparam\b(?:\s+(?P<config_key>[A-Za-z0-9_.-]+))?(?:\s*[=:]\s*(?P<config_value>[^,\]]+))?",
+    re.IGNORECASE,
+)
 SYSLOGD_LIFECYCLE_RE = re.compile(
     r"\b(?:start(?:ed|ing)?|restart(?:ed|ing)?|exiting|exit|shutdown|shutting down)\b",
     re.IGNORECASE,
@@ -182,6 +206,8 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         event_type = "syslogd_lifecycle"
     if event_type is None and process_name == "logread" and LOGREAD_LIFECYCLE_RE.search(message):
         event_type = "logread_lifecycle"
+    if event_type is None and process_name == "logread" and "logread" in message.lower():
+        event_type = "logread_event"
     event_category = classify_event_category(message, process_name, event_type)
     current_mac = extract_mac(message)
     client_mac, ap_mac, mac = extract_client_ap_mac(message, current_mac)
@@ -277,6 +303,10 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         sta_tracker_event_id=additional_fields.get("sta_tracker_event_id"),
         config_key=additional_fields.get("config_key"),
         config_value=additional_fields.get("config_value"),
+        client_ip=additional_fields.get("client_ip"),
+        interface=additional_fields.get("interface"),
+        port=additional_fields.get("port"),
+        link_state=additional_fields.get("link_state"),
     )
 
 
@@ -1021,6 +1051,49 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                     "config_value": match.group("config_value").strip(),
                 }
             )
+    if event_type == "config_setparam":
+        match = CONFIG_SETPARAM_DETAILS_RE.search(message)
+        if match:
+            config_key = match.group("config_key")
+            config_value = match.group("config_value")
+            if config_key:
+                fields["config_key"] = config_key.strip()
+            if config_value:
+                fields["config_value"] = config_value.strip()
+
+    if event_type in {"client_join", "client_associated", "handshake_completed"}:
+        join_match = CLIENT_JOIN_RE.search(message) if event_type == "client_join" else None
+        assoc_match = CLIENT_ASSOCIATED_RE.search(message) if event_type == "client_associated" else None
+        hs_match = HANDSHAKE_COMPLETED_RE.search(message) if event_type == "handshake_completed" else None
+        match = join_match or assoc_match or hs_match
+        if match:
+            client_mac = to_lower_or_none(match.groupdict().get("client_mac")) or extract_mac(message)
+            radio = to_lower_or_none(match.groupdict().get("radio")) or extract_radio(message)
+            if client_mac:
+                fields["client_mac"] = client_mac
+                fields["mac"] = client_mac
+            if radio:
+                fields["radio"] = radio
+
+    if event_type == "client_ip_assigned":
+        match = CLIENT_IP_EVENT_RE.search(message)
+        client_mac = extract_mac(message)
+        if client_mac:
+            fields["client_mac"] = client_mac
+            fields["mac"] = client_mac
+        if match:
+            fields["client_ip"] = match.group("client_ip")
+        radio = extract_radio(message)
+        if radio:
+            fields["radio"] = radio
+
+    if event_type in {"network_link_up", "network_link_down", "link_up", "link_down"}:
+        match = LINK_EVENT_DETAILS_RE.search(message)
+        link_state = "up" if event_type in {"network_link_up", "link_up"} else "down"
+        fields["link_state"] = link_state
+        if match:
+            fields["interface"] = match.group("interface")
+            fields["port"] = to_int_or_none(match.group("port"))
 
     if event_type == "station_join":
         match = STA_JOIN_DETAILS_RE.search(message)

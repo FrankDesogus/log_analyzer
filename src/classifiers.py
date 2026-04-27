@@ -9,6 +9,12 @@ RECV_AUTH_REQ_RE = re.compile(r"\brecv(?:_|\s+)auth_req\b", re.IGNORECASE)
 SEND_AUTH_RSP_RE = re.compile(r"\bsend(?:_|\s+)auth_rsp\b", re.IGNORECASE)
 ROAM_RE = re.compile(r"\b(?:sta_roam|roam)\b", re.IGNORECASE)
 IP_EVENT_RE = re.compile(r"\b(?:EVENT_STA_IP|sta_ip)\b", re.IGNORECASE)
+EVENT_STA_JOIN_RE = re.compile(r"\bEVENT_STA_JOIN\b", re.IGNORECASE)
+STA_ASSOCIATED_RE = re.compile(r"\bSTA\b.*\bassociated\b", re.IGNORECASE)
+HANDSHAKE_COMPLETED_RE = re.compile(
+    r"\b(?:pairwise key handshake completed|handshake completed)\b",
+    re.IGNORECASE,
+)
 CONTROLLER_CONFIG_RE = re.compile(
     r"\b(?:save\s*config|apply\s*config|reporter\s*config|controller\s*config|provision(?:ing)?)\b",
     re.IGNORECASE,
@@ -70,6 +76,10 @@ DHCP_IP_ASSIGNMENT_RE = re.compile(
 )
 LINK_UP_RE = re.compile(r"\blink (?:has become )?up\b", re.IGNORECASE)
 LINK_DOWN_RE = re.compile(r"\blink (?:has become )?down\b", re.IGNORECASE)
+LINK_I_UP_RE = re.compile(r"\bLINK-I-Up\b", re.IGNORECASE)
+LINK_W_DOWN_RE = re.compile(r"\bLINK-W-Down\b", re.IGNORECASE)
+LINK_STATE_UP_RE = re.compile(r"\b(?:LINK-[A-Z]-Up|link\s+(?:has become\s+)?up)\b", re.IGNORECASE)
+LINK_STATE_DOWN_RE = re.compile(r"\b(?:LINK-[A-Z]-Down|link\s+(?:has become\s+)?down)\b", re.IGNORECASE)
 WIRELESS_AGG_DNS_TIMEOUT_RE = re.compile(
     r"\bwireless_agg_stats\.log_sta_anomalies\(\):.*\banomalies\s*=\s*dns_timeout\b",
     re.IGNORECASE,
@@ -80,6 +90,19 @@ STA_ASSOC_TRACKER_FAILURE_RE = re.compile(
 )
 ACE_REPORTER_SAVE_CONFIG_RE = re.compile(
     r"\bace_reporter\.reporter_save_config\(\):\s*[^:]+:\s*.+$",
+    re.IGNORECASE,
+)
+CONFIG_SETPARAM_RE = re.compile(r"\b(?:mcad\s+setparam|setparam)\b", re.IGNORECASE)
+CONFIG_APPLY_RE = re.compile(r"\b(?:apply-config|fast apply)\b", re.IGNORECASE)
+CONFIG_SAVE_REQUIRED_RE = re.compile(r"\b(?:need_cfg_save|cfg_save)\b", re.IGNORECASE)
+CONFIG_CHANGE_RE = re.compile(r"\b(?:system\.cfg|mca-monitor)\b", re.IGNORECASE)
+LOGGING_CONFIG_CHANGED_RE = re.compile(r"\bsyslogd arguments changed\b", re.IGNORECASE)
+PROCESS_SIGTERM_TIMEOUT_RE = re.compile(
+    r"\bProcess didn't stop on SIGTERM\b",
+    re.IGNORECASE,
+)
+PROCESS_LIFECYCLE_EVENT_RE = re.compile(
+    r"\b(?:procd|process\b.*\b(?:start|stop|restart|sigterm|exit))\b",
     re.IGNORECASE,
 )
 
@@ -112,6 +135,14 @@ def classify_event_type(message: str) -> Optional[str]:
         return "reassoc_request"
     if STA_JOIN_RE.search(message):
         return "station_join"
+    if EVENT_STA_JOIN_RE.search(message):
+        return "client_join"
+    if STA_ASSOCIATED_RE.search(message):
+        return "client_associated"
+    if HANDSHAKE_COMPLETED_RE.search(message):
+        return "handshake_completed"
+    if IP_EVENT_RE.search(message):
+        return "client_ip_assigned"
     if ASSOC_REPORT_SUCCESS_RE.search(message):
         return "assoc_success"
     if MAC_TABLE_INSERT_RE.search(message):
@@ -134,6 +165,28 @@ def classify_event_type(message: str) -> Optional[str]:
         return "network_link_up"
     if LINK_DOWN_RE.search(message):
         return "network_link_down"
+    if LINK_I_UP_RE.search(message):
+        return "link_up"
+    if LINK_W_DOWN_RE.search(message):
+        return "link_down"
+    if LINK_STATE_UP_RE.search(message):
+        return "link_up"
+    if LINK_STATE_DOWN_RE.search(message):
+        return "link_down"
+    if CONFIG_SETPARAM_RE.search(message):
+        return "config_setparam"
+    if CONFIG_APPLY_RE.search(message):
+        return "config_apply"
+    if CONFIG_SAVE_REQUIRED_RE.search(message):
+        return "config_save_required"
+    if CONFIG_CHANGE_RE.search(message):
+        return "config_change"
+    if LOGGING_CONFIG_CHANGED_RE.search(message):
+        return "logging_config_changed"
+    if PROCESS_SIGTERM_TIMEOUT_RE.search(message):
+        return "process_sigterm_timeout"
+    if PROCESS_LIFECYCLE_EVENT_RE.search(message):
+        return "process_lifecycle_event"
     if CFG80211_ASSOC_REQ_HANDLER_RE.search(message):
         return "cfg80211_assoc_request_handler"
     if EAPOL_KEY_RE.search(message):
@@ -222,6 +275,22 @@ def classify_event_category(
         return "network_dhcp"
     if event_type in {"network_link_up", "network_link_down"}:
         return "network_link"
+    if event_type in {"link_up", "link_down"}:
+        return "network_link"
+    if event_type in {"client_join", "client_associated"}:
+        return "wifi_association"
+    if event_type == "handshake_completed":
+        return "wifi_security"
+    if event_type == "client_ip_assigned":
+        return "wifi_client_ip"
+    if event_type in {"config_setparam", "config_apply", "config_save_required", "config_change"}:
+        return "device_config"
+    if event_type == "device_management_event":
+        return "device_management"
+    if event_type in {"logging_config_changed", "logread_event"}:
+        return "system_logging"
+    if event_type in {"process_sigterm_timeout", "process_lifecycle_event"}:
+        return "process_lifecycle"
     if event_type in {"syslogd_lifecycle", "logread_lifecycle"}:
         return "system_logging"
 

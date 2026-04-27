@@ -311,6 +311,67 @@ class NewEventClassificationTests(unittest.TestCase):
         self.assertEqual(link_down.event_type, "network_link_down")
         self.assertEqual(link_down.event_category, "network_link")
 
+    def test_config_and_management_classification(self) -> None:
+        setparam = self._parse_message("mcad setparam inform_url=http://10.0.0.2:8080/inform")
+        apply_cfg = self._parse_message("syswrapper: fast apply complete")
+        cfg_save = self._parse_message("mca-monitor: need_cfg_save in system.cfg")
+
+        self.assertEqual(setparam.event_type, "config_setparam")
+        self.assertEqual(setparam.event_category, "device_config")
+        self.assertEqual(setparam.config_key, "inform_url")
+        self.assertEqual(setparam.config_value, "http://10.0.0.2:8080/inform")
+
+        self.assertEqual(apply_cfg.event_type, "config_apply")
+        self.assertEqual(apply_cfg.event_category, "device_config")
+
+        self.assertEqual(cfg_save.event_type, "config_save_required")
+        self.assertEqual(cfg_save.event_category, "device_config")
+
+    def test_wifi_additional_patterns(self) -> None:
+        join = self._parse_message("EVENT_STA_JOIN radio=ra1 sta=76:27:03:0e:78:15")
+        associated = self._parse_message("ra1: STA 76:27:03:0e:78:15 associated")
+        handshake = self._parse_message("ra1: pairwise key handshake completed for 76:27:03:0e:78:15")
+        sta_ip = self._parse_message("EVENT_STA_IP ra1 STA 76:27:03:0e:78:15 ip=192.168.1.77")
+
+        self.assertEqual(join.event_type, "client_join")
+        self.assertEqual(join.event_category, "wifi_association")
+        self.assertEqual(join.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(join.radio, "ra1")
+
+        self.assertEqual(associated.event_type, "client_associated")
+        self.assertEqual(associated.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(associated.radio, "ra1")
+
+        self.assertEqual(handshake.event_type, "handshake_completed")
+        self.assertEqual(handshake.event_category, "wifi_security")
+        self.assertEqual(handshake.client_mac, "76:27:03:0e:78:15")
+
+        self.assertEqual(sta_ip.event_type, "client_ip_assigned")
+        self.assertEqual(sta_ip.event_category, "wifi_client_ip")
+        self.assertEqual(sta_ip.client_ip, "192.168.1.77")
+        self.assertEqual(sta_ip.client_mac, "76:27:03:0e:78:15")
+
+    def test_link_and_process_lifecycle_patterns(self) -> None:
+        link_i_up = self._parse_message("eth1: LINK-I-Up")
+        link_w_down = self._parse_message("eth1 port 2: LINK-W-Down")
+        syslog_args = self._parse_message("syslogd arguments changed, restarting")
+        sigterm_timeout = self._parse_message("procd: Process didn't stop on SIGTERM")
+
+        self.assertEqual(link_i_up.event_type, "link_up")
+        self.assertEqual(link_i_up.event_category, "network_link")
+        self.assertEqual(link_i_up.interface, "eth1")
+        self.assertEqual(link_i_up.link_state, "up")
+
+        self.assertEqual(link_w_down.event_type, "link_down")
+        self.assertEqual(link_w_down.port, 2)
+        self.assertEqual(link_w_down.link_state, "down")
+
+        self.assertEqual(syslog_args.event_type, "logging_config_changed")
+        self.assertEqual(syslog_args.event_category, "system_logging")
+
+        self.assertEqual(sigterm_timeout.event_type, "process_sigterm_timeout")
+        self.assertEqual(sigterm_timeout.event_category, "process_lifecycle")
+
 
 if __name__ == "__main__":
     unittest.main()
