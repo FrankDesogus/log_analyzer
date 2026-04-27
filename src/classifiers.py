@@ -47,6 +47,20 @@ SEND_DEAUTH_RE = re.compile(r"\[send\s+deauth\]", re.IGNORECASE)
 RADIUS_ENTRY_DEL_RE = re.compile(r"\bradius\s+entry\[\d+\]\s+DEL\s+\(", re.IGNORECASE)
 DRIVER_MISSING_STATION_ENTRY_RE = re.compile(r"Can't find pEntry in ", re.IGNORECASE)
 
+STA_JOIN_RE = re.compile(r"\bwevent:\s*STA_JOIN\b", re.IGNORECASE)
+REASSOC_RESPONSE_RE = re.compile(r"\[send\s+reassoc_rsp\]", re.IGNORECASE)
+ASSOC_REPORT_SUCCESS_RE = re.compile(r"\[assoc_report\].*\bSuccess\s*:", re.IGNORECASE)
+MAC_TABLE_INSERT_RE = re.compile(r"\bMacTableInsertEntry\(\)", re.IGNORECASE)
+MAC_TABLE_DELETE_RE = re.compile(r"\bMacTableDeleteEntryWithFlags\(\)", re.IGNORECASE)
+PEER_REASSOC_REQ_RE = re.compile(r"\bpeer_reassoc_req\s*:\s*\d+\s*usec\b", re.IGNORECASE)
+QOS_MAP_SUPPORT_RE = re.compile(r"\bentry\s+wcid\s+\d+\s+QosMapSupport=", re.IGNORECASE)
+RRM_NEIGHBOR_REP_RE = re.compile(r"\bRRM_EnqueueNeighborRep\(\)\s*:\s*send Neighbor RSP\b", re.IGNORECASE)
+STATION_IDLE_PROBE_RE = re.compile(
+    r"Send\s+NULL\s+to\s+STA-MAC\s+(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\s+idle\(\d+\)\s+timeout\(\d+\)",
+    re.IGNORECASE,
+)
+DRIVER_QUEUE_FLUSH_RE = re.compile(r"\bcb2,\s*flush one!\b", re.IGNORECASE)
+
 
 def classify_event_type(message: str) -> Optional[str]:
     """Normalize known message patterns into stable event types."""
@@ -62,8 +76,28 @@ def classify_event_type(message: str) -> Optional[str]:
         return "dns_timeout"
     if STA_ASSOC_TRACKER_DNS_TIMEOUT_RE.search(message):
         return "dns_timeout"
+    if REASSOC_RESPONSE_RE.search(message):
+        return "reassoc_response"
     if REASSOC_REQ_RE.search(message):
         return "reassoc_request"
+    if STA_JOIN_RE.search(message):
+        return "station_join"
+    if ASSOC_REPORT_SUCCESS_RE.search(message):
+        return "assoc_success"
+    if MAC_TABLE_INSERT_RE.search(message):
+        return "station_table_insert"
+    if MAC_TABLE_DELETE_RE.search(message):
+        return "station_table_delete"
+    if PEER_REASSOC_REQ_RE.search(message):
+        return "reassoc_processing_time"
+    if QOS_MAP_SUPPORT_RE.search(message):
+        return "station_qos_map_support"
+    if RRM_NEIGHBOR_REP_RE.search(message):
+        return "rrm_neighbor_response"
+    if STATION_IDLE_PROBE_RE.search(message):
+        return "station_idle_probe"
+    if DRIVER_QUEUE_FLUSH_RE.search(message):
+        return "driver_queue_flush"
     if CFG80211_ASSOC_REQ_HANDLER_RE.search(message):
         return "cfg80211_assoc_request_handler"
     if EAPOL_KEY_RE.search(message):
@@ -111,9 +145,9 @@ def classify_event_category(
         return "network_dns"
     if event_type == "wifi_scan_error":
         return "wifi_system"
-    if event_type in {"reassoc_request"}:
+    if event_type in {"reassoc_request", "reassoc_response", "reassoc_processing_time"}:
         return "wifi_roam"
-    if event_type in {"cfg80211_assoc_request_handler", "driver_missing_station_entry"}:
+    if event_type in {"cfg80211_assoc_request_handler", "driver_missing_station_entry", "station_table_insert", "station_table_delete", "driver_queue_flush"}:
         return "wifi_driver"
     if event_type in {"eapol_packet", "eapol_key"}:
         return "wifi_eapol"
@@ -134,6 +168,14 @@ def classify_event_category(
         return "wifi_auth"
     if event_type == "disconnect":
         return "wifi_disconnect"
+    if event_type in {"station_join", "assoc_success"}:
+        return "wifi_association"
+    if event_type == "station_qos_map_support":
+        return "wifi_capability"
+    if event_type == "rrm_neighbor_response":
+        return "wifi_rrm"
+    if event_type == "station_idle_probe":
+        return "wifi_keepalive"
 
     if ROAM_RE.search(message):
         return "wifi_roam"

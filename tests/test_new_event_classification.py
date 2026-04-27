@@ -184,6 +184,52 @@ class NewEventClassificationTests(unittest.TestCase):
         self.assertEqual(event.event_category, "wifi_driver")
         self.assertEqual(event.driver_context, "CFG80211_StaPortSecured")
 
+    def test_station_join_and_assoc_patterns(self) -> None:
+        station_join = self._parse_message(
+            "[772916.596142] wevent: STA_JOIN ra2:19 [76:27:03:0e:78:15]"
+        )
+        self.assertEqual(station_join.event_type, "station_join")
+        self.assertEqual(station_join.event_category, "wifi_association")
+        self.assertEqual(station_join.radio, "ra2")
+        self.assertEqual(station_join.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(station_join.aid, 19)
+
+        reassoc_rsp = self._parse_message(
+            "[772916.596242] ra2:[send reassoc_rsp]. TA:[0e:ea:14:a0:22:a7], RA:[76:27:03:0e:78:15] status:0 aid:19"
+        )
+        self.assertEqual(reassoc_rsp.event_type, "reassoc_response")
+        self.assertEqual(reassoc_rsp.event_category, "wifi_roam")
+        self.assertEqual(reassoc_rsp.ap_mac, "0e:ea:14:a0:22:a7")
+        self.assertEqual(reassoc_rsp.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(reassoc_rsp.aid, 19)
+
+        assoc_success = self._parse_message(
+            "[772916.596342] [assoc_report] ra2:[76:27:03:0e:78:15] Success:0 aid:19 wcid:4 phy:ax bw:80 mcs:7 wmm:1 rrm:1"
+        )
+        self.assertEqual(assoc_success.event_type, "assoc_success")
+        self.assertEqual(assoc_success.wcid, 4)
+        self.assertEqual(assoc_success.bandwidth, "80")
+
+    def test_driver_and_keepalive_patterns(self) -> None:
+        insert_evt = self._parse_message("[772916.700001] MacTableInsertEntry(): wcid 4 EntryType:0")
+        self.assertEqual(insert_evt.event_type, "station_table_insert")
+        self.assertEqual(insert_evt.wcid, 4)
+        self.assertEqual(insert_evt.entry_type, 0)
+
+        delete_evt = self._parse_message("[772916.700101] MacTableDeleteEntryWithFlags(): wcid 4")
+        self.assertEqual(delete_evt.event_type, "station_table_delete")
+
+        qos_evt = self._parse_message("[772916.700201] entry wcid 4 QosMapSupport=1")
+        self.assertEqual(qos_evt.event_type, "station_qos_map_support")
+        self.assertEqual(qos_evt.qos_map_support, 1)
+
+        idle_evt = self._parse_message(
+            "[772916.700301] ra2: Send NULL to STA-MAC 76:27:03:0e:78:15 idle(300) timeout(5)"
+        )
+        self.assertEqual(idle_evt.event_type, "station_idle_probe")
+        self.assertEqual(idle_evt.idle_seconds, 300)
+        self.assertEqual(idle_evt.timeout_seconds, 5)
+
 
 if __name__ == "__main__":
     unittest.main()

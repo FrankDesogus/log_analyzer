@@ -47,6 +47,7 @@ UNKNOWN_EVENT_FIELDS = [
     "process_name",
     "raw_message",
     "raw_line",
+    "unknown_pattern",
     "event_type",
     "event_category",
     "client_mac",
@@ -113,6 +114,32 @@ RADIUS_ENTRY_DEL_RE = re.compile(
     re.IGNORECASE,
 )
 DRIVER_MISSING_ENTRY_RE = re.compile(r"Can't find pEntry in (?P<context>[A-Za-z0-9_]+)", re.IGNORECASE)
+STA_JOIN_DETAILS_RE = re.compile(
+    r"wevent:\s*STA_JOIN\s+(?P<radio>rai?\d+):(?P<aid>\d+)\s+\[(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\](?:.*?\bwcid[:=](?P<wcid>\d+))?",
+    re.IGNORECASE,
+)
+REASSOC_RESPONSE_RE = re.compile(
+    r"(?P<radio>rai?\d+):\s*\[send\s+reassoc_rsp\]\.\s*TA:\[(?P<ta>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\],\s*RA:\[(?P<ra>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\](?:.*?\bstatus[:=](?P<status>\d+))?(?:.*?\baid[:=](?P<aid>\d+))?",
+    re.IGNORECASE,
+)
+ASSOC_REPORT_SUCCESS_RE = re.compile(
+    r"\[assoc_report\]\s*(?P<radio>rai?\d+):\[(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\]\s*Success:\s*(?P<status>\d+)(?:.*?\baid[:=](?P<aid>\d+))?(?:.*?\bwcid[:=](?P<wcid>\d+))?(?:.*?\bphy[:=](?P<phy>[A-Za-z0-9._-]+))?(?:.*?\bbw[:=](?P<bandwidth>[A-Za-z0-9._-]+))?(?:.*?\bmcs[:=](?P<mcs>[A-Za-z0-9._-]+))?(?:.*?\bwmm[:=](?P<wmm>[A-Za-z0-9._-]+))?(?:.*?\brrm[:=](?P<rrm>[A-Za-z0-9._-]+))?",
+    re.IGNORECASE,
+)
+MAC_TABLE_INSERT_RE = re.compile(
+    r"MacTableInsertEntry\(\):\s*wcid\s*(?P<wcid>\d+)\s*EntryType:(?P<entry_type>\d+)",
+    re.IGNORECASE,
+)
+MAC_TABLE_DELETE_RE = re.compile(
+    r"MacTableDeleteEntryWithFlags\(\):\s*wcid\s*(?P<wcid>\d+)",
+    re.IGNORECASE,
+)
+PEER_REASSOC_REQ_RE = re.compile(r"peer_reassoc_req:\s*(?P<duration_usec>\d+)\s*usec", re.IGNORECASE)
+QOS_MAP_SUPPORT_RE = re.compile(r"entry\s+wcid\s*(?P<wcid>\d+)\s+QosMapSupport=(?P<qos_map_support>\d+)", re.IGNORECASE)
+STATION_IDLE_PROBE_RE = re.compile(
+    r"(?P<radio>rai?\d+):\s*Send NULL to STA-MAC\s+(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+idle\((?P<idle_seconds>\d+)\)\s+timeout\((?P<timeout_seconds>\d+)\)",
+    re.IGNORECASE,
+)
 
 
 def parse_line(line: str) -> Optional[ParsedEvent]:
@@ -202,6 +229,18 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         reason=additional_fields.get("reason"),
         protection=additional_fields.get("protection"),
         driver_context=additional_fields.get("driver_context"),
+        aid=additional_fields.get("aid"),
+        wcid=additional_fields.get("wcid"),
+        entry_type=additional_fields.get("entry_type"),
+        phy=additional_fields.get("phy"),
+        bandwidth=additional_fields.get("bandwidth"),
+        mcs=additional_fields.get("mcs"),
+        wmm=additional_fields.get("wmm"),
+        rrm=additional_fields.get("rrm"),
+        duration_usec=additional_fields.get("duration_usec"),
+        qos_map_support=additional_fields.get("qos_map_support"),
+        idle_seconds=additional_fields.get("idle_seconds"),
+        timeout_seconds=additional_fields.get("timeout_seconds"),
     )
 
 
@@ -212,27 +251,45 @@ def parse_file(
     parser_report_output_path: Optional[Path] = None,
     unknown_events_output_path: Optional[Path] = None,
     unknown_summary_output_path: Optional[Path] = None,
+    unknown_samples_output_path: Optional[Path] = None,
     include_raw_in_canonical_output: bool = False,
+    export_parsed_events: bool = True,
+    export_all_unknown_events: bool = True,
+    max_unknown_events_export: Optional[int] = None,
+    max_unknown_samples_per_pattern: int = 3,
 ) -> None:
     parsed_events = parse_file_to_events(input_path)
 
-    with output_path.open("w", encoding="utf-8") as file_out:
-        json.dump(parsed_events, file_out, indent=2, ensure_ascii=False)
+    if export_parsed_events:
+        with output_path.open("w", encoding="utf-8") as file_out:
+            json.dump(parsed_events, file_out, indent=2, ensure_ascii=False)
 
     print(f"Lette {len(parsed_events)} righe.")
-    print(f"Output raw scritto in: {output_path}")
+    if export_parsed_events:
+        print(f"Output raw scritto in: {output_path}")
 
-    unknown_events = extract_unknown_events(parsed_events)
+    unknown_events = extract_unknown_events(
+        parsed_events,
+        export_all_unknown_events=export_all_unknown_events,
+        max_unknown_events_export=max_unknown_events_export,
+    )
     if unknown_events_output_path is not None:
         with unknown_events_output_path.open("w", encoding="utf-8") as file_out:
             json.dump(unknown_events, file_out, indent=2, ensure_ascii=False)
         print(f"Unknown events scritti in: {unknown_events_output_path}")
 
-    unknown_summary = build_unknown_summary(unknown_events)
+    unknown_summary, unknown_samples = build_unknown_summary(
+        unknown_events,
+        max_unknown_samples_per_pattern=max_unknown_samples_per_pattern,
+    )
     if unknown_summary_output_path is not None:
         with unknown_summary_output_path.open("w", encoding="utf-8") as file_out:
             json.dump(unknown_summary, file_out, indent=2, ensure_ascii=False)
         print(f"Unknown summary scritto in: {unknown_summary_output_path}")
+    if unknown_samples_output_path is not None:
+        with unknown_samples_output_path.open("w", encoding="utf-8") as file_out:
+            json.dump(unknown_samples, file_out, indent=2, ensure_ascii=False)
+        print(f"Unknown samples scritti in: {unknown_samples_output_path}")
 
     if canonical_output_path is None:
         return
@@ -255,10 +312,13 @@ def parse_file(
             parsed_events,
             correlated_payload["canonical_events"],
             unknown_events,
+            unknown_summary,
             output_path,
             canonical_output_path,
             unknown_events_output_path,
             unknown_summary_output_path,
+            unknown_samples_output_path,
+            export_parsed_events=export_parsed_events,
         )
         with parser_report_output_path.open("w", encoding="utf-8") as file_out:
             json.dump(parser_report, file_out, indent=2, ensure_ascii=False)
@@ -281,10 +341,13 @@ def build_parser_report(
     parsed_events: list[dict[str, Any]],
     canonical_events: list[dict[str, Any]],
     unknown_events: list[dict[str, Any]],
+    unknown_summary: dict[str, Any],
     parsed_output_path: Path,
     canonical_output_path: Optional[Path] = None,
     unknown_events_output_path: Optional[Path] = None,
     unknown_summary_output_path: Optional[Path] = None,
+    unknown_samples_output_path: Optional[Path] = None,
+    export_parsed_events: bool = True,
 ) -> dict[str, Any]:
     parse_status_counts = Counter((event.get("parse_status") or "unknown") for event in parsed_events)
     event_type_counts = Counter((event.get("event_type") or "unknown") for event in parsed_events)
@@ -297,6 +360,13 @@ def build_parser_report(
     source_ip_counts = Counter(event.get("source_ip") for event in parsed_events if event.get("source_ip"))
     duplicate_candidates = sum(1 for event in parsed_events if event.get("is_duplicate_candidate"))
     fine_duplicate_candidates = sum(1 for event in parsed_events if event.get("is_fine_duplicate_candidate"))
+    unknown_event_count_total = sum(1 for event in parsed_events if is_unknown_event_type(event.get("event_type")))
+    unknown_events_full = extract_unknown_events(parsed_events, export_all_unknown_events=True)
+    unknown_by_source_ip = Counter((event.get("source_ip") or "unknown") for event in unknown_events_full)
+    unknown_by_process_name = Counter((event.get("process_name") or "unknown") for event in unknown_events_full)
+    unknown_by_event_category = Counter((event.get("event_category") or "unknown") for event in unknown_events_full)
+    unknown_with_client_mac_count = sum(1 for event in unknown_events_full if event.get("client_mac"))
+    unknown_with_radio_count = sum(1 for event in unknown_events_full if event.get("radio"))
 
     return {
         "total_raw_events": len(parsed_events),
@@ -316,12 +386,28 @@ def build_parser_report(
             ),
         },
         "unknown_event_count": event_type_counts.get("unknown", 0),
+        "unknown_event_count_total": unknown_event_count_total,
         "unknown_events_exported_count": len(unknown_events),
+        "unknown_exported_count": len(unknown_events),
+        "unknown_unique_pattern_count": int(unknown_summary.get("unique_pattern_count", 0)),
+        "unknown_top_patterns": unknown_summary.get("top_patterns", []),
+        "unknown_by_source_ip": dict(unknown_by_source_ip),
+        "unknown_by_process_name": dict(unknown_by_process_name),
+        "unknown_by_event_category": dict(unknown_by_event_category),
+        "unknown_with_client_mac_count": unknown_with_client_mac_count,
+        "unknown_without_client_mac_count": len(unknown_events_full) - unknown_with_client_mac_count,
+        "unknown_with_radio_count": unknown_with_radio_count,
+        "unknown_without_radio_count": len(unknown_events_full) - unknown_with_radio_count,
+        "unknown_reason": {
+            "event_type_null_or_empty_count": unknown_event_count_total - event_type_counts.get("unknown", 0),
+            "event_type_literal_unknown_count": event_type_counts.get("unknown", 0),
+        },
         "generated_files": {
-            "parsed_events": str(parsed_output_path),
+            "parsed_events": str(parsed_output_path) if export_parsed_events else None,
             "canonical_events": str(canonical_output_path) if canonical_output_path is not None else None,
             "unknown_events": str(unknown_events_output_path) if unknown_events_output_path is not None else None,
             "unknown_summary": str(unknown_summary_output_path) if unknown_summary_output_path is not None else None,
+            "unknown_samples": str(unknown_samples_output_path) if unknown_samples_output_path is not None else None,
         },
         "events_without_client_mac": sum(1 for event in parsed_events if not event.get("client_mac")),
         "events_without_radio": sum(1 for event in parsed_events if not event.get("radio")),
@@ -334,21 +420,35 @@ def build_parser_report(
     }
 
 
-def extract_unknown_events(parsed_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def is_unknown_event_type(event_type: Any) -> bool:
+    if event_type is None:
+        return True
+    if isinstance(event_type, str) and event_type.strip().lower() in {"", "unknown"}:
+        return True
+    return False
+
+
+def extract_unknown_events(
+    parsed_events: list[dict[str, Any]],
+    export_all_unknown_events: bool = True,
+    max_unknown_events_export: Optional[int] = None,
+) -> list[dict[str, Any]]:
     unknown_events: list[dict[str, Any]] = []
     for event in parsed_events:
-        event_type_is_unknown = event.get("event_type") == "unknown"
-        is_system_without_mac = (
-            event.get("event_category") == "system_event"
-            and event.get("client_mac") is None
-        )
-        if not (event_type_is_unknown or is_system_without_mac):
+        if not is_unknown_event_type(event.get("event_type")):
             continue
-        unknown_events.append({field: event.get(field) for field in UNKNOWN_EVENT_FIELDS})
+        unknown_record = dict(event)
+        unknown_record["unknown_pattern"] = normalize_unknown_message_pattern(event.get("raw_message") or "")
+        unknown_events.append({field: unknown_record.get(field) for field in UNKNOWN_EVENT_FIELDS})
+        if not export_all_unknown_events and max_unknown_events_export is not None and len(unknown_events) >= max_unknown_events_export:
+            break
     return unknown_events
 
 
-def build_unknown_summary(unknown_events: list[dict[str, Any]]) -> dict[str, Any]:
+def build_unknown_summary(
+    unknown_events: list[dict[str, Any]],
+    max_unknown_samples_per_pattern: int = 3,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     count_by_source_ip = Counter((event.get("source_ip") or "unknown") for event in unknown_events)
     count_by_host = Counter((event.get("host") or "unknown") for event in unknown_events)
     count_by_facility = Counter((event.get("facility") or "unknown") for event in unknown_events)
@@ -358,8 +458,7 @@ def build_unknown_summary(unknown_events: list[dict[str, Any]]) -> dict[str, Any
 
     pattern_to_events: dict[str, list[dict[str, Any]]] = {}
     for event in unknown_events:
-        raw_message = event.get("raw_message") or ""
-        normalized_pattern = normalize_unknown_message_pattern(raw_message)
+        normalized_pattern = event.get("unknown_pattern") or normalize_unknown_message_pattern(event.get("raw_message") or "")
         pattern_to_events.setdefault(normalized_pattern, []).append(event)
 
     sorted_patterns = sorted(pattern_to_events.items(), key=lambda item: len(item[1]), reverse=True)
@@ -374,10 +473,11 @@ def build_unknown_summary(unknown_events: list[dict[str, Any]]) -> dict[str, Any
             }
         )
 
-    sample_unknown_events = select_representative_unknown_samples(sorted_patterns, max_samples=50)
+    samples = build_unknown_samples(sorted_patterns, max_unknown_samples_per_pattern=max_unknown_samples_per_pattern)
 
-    return {
+    summary = {
         "total_unknown_events": len(unknown_events),
+        "unique_pattern_count": len(pattern_to_events),
         "count_by_source_ip": dict(count_by_source_ip),
         "count_by_host": dict(count_by_host),
         "count_by_facility": dict(count_by_facility),
@@ -385,8 +485,9 @@ def build_unknown_summary(unknown_events: list[dict[str, Any]]) -> dict[str, Any
         "count_by_process_name": dict(count_by_process_name),
         "count_by_event_category": dict(count_by_event_category),
         "top_raw_message_patterns": top_raw_message_patterns,
-        "sample_unknown_events": sample_unknown_events,
+        "top_patterns": top_raw_message_patterns[:10],
     }
+    return summary, samples
 
 
 def normalize_unknown_message_pattern(raw_message: str) -> str:
@@ -432,6 +533,28 @@ def select_representative_unknown_samples(
         if not added_this_round:
             break
 
+    return samples
+
+
+def build_unknown_samples(
+    sorted_patterns: list[tuple[str, list[dict[str, Any]]]],
+    max_unknown_samples_per_pattern: int,
+) -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    for pattern, pattern_events in sorted_patterns:
+        for event in pattern_events[:max_unknown_samples_per_pattern]:
+            samples.append(
+                {
+                    "pattern": pattern,
+                    "line_number": event.get("line_number"),
+                    "source_ip": event.get("source_ip"),
+                    "process_name": event.get("process_name"),
+                    "event_category": event.get("event_category"),
+                    "raw_message": event.get("raw_message"),
+                    "client_mac": event.get("client_mac"),
+                    "radio": event.get("radio"),
+                }
+            )
     return samples
 
 
@@ -666,6 +789,100 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                     "mac": client_mac,
                     "ap_mac": ap_mac,
                     "radio": match.group("radio").lower(),
+                }
+            )
+
+    if event_type == "station_join":
+        match = STA_JOIN_DETAILS_RE.search(message)
+        if match:
+            client_mac = match.group("client_mac").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": match.group("radio").lower(),
+                    "aid": to_int_or_none(match.group("aid")),
+                    "wcid": to_int_or_none(match.group("wcid")),
+                }
+            )
+
+    if event_type == "reassoc_response":
+        match = REASSOC_RESPONSE_RE.search(message)
+        if match:
+            client_mac = match.group("ra").lower()
+            ap_mac = match.group("ta").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "ap_mac": ap_mac,
+                    "radio": match.group("radio").lower(),
+                    "assoc_status": match.group("status"),
+                    "aid": to_int_or_none(match.group("aid")),
+                }
+            )
+
+    if event_type == "assoc_success":
+        match = ASSOC_REPORT_SUCCESS_RE.search(message)
+        if match:
+            client_mac = match.group("client_mac").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": match.group("radio").lower(),
+                    "assoc_status": match.group("status"),
+                    "aid": to_int_or_none(match.group("aid")),
+                    "wcid": to_int_or_none(match.group("wcid")),
+                    "phy": match.group("phy"),
+                    "bandwidth": match.group("bandwidth"),
+                    "mcs": match.group("mcs"),
+                    "wmm": match.group("wmm"),
+                    "rrm": match.group("rrm"),
+                }
+            )
+
+    if event_type == "station_table_insert":
+        match = MAC_TABLE_INSERT_RE.search(message)
+        if match:
+            fields.update(
+                {
+                    "wcid": to_int_or_none(match.group("wcid")),
+                    "entry_type": to_int_or_none(match.group("entry_type")),
+                }
+            )
+
+    if event_type == "station_table_delete":
+        match = MAC_TABLE_DELETE_RE.search(message)
+        if match:
+            fields["wcid"] = to_int_or_none(match.group("wcid"))
+
+    if event_type == "reassoc_processing_time":
+        match = PEER_REASSOC_REQ_RE.search(message)
+        if match:
+            fields["duration_usec"] = to_int_or_none(match.group("duration_usec"))
+
+    if event_type == "station_qos_map_support":
+        match = QOS_MAP_SUPPORT_RE.search(message)
+        if match:
+            fields.update(
+                {
+                    "wcid": to_int_or_none(match.group("wcid")),
+                    "qos_map_support": to_int_or_none(match.group("qos_map_support")),
+                }
+            )
+
+    if event_type == "station_idle_probe":
+        match = STATION_IDLE_PROBE_RE.search(message)
+        if match:
+            client_mac = match.group("client_mac").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": match.group("radio").lower(),
+                    "idle_seconds": to_int_or_none(match.group("idle_seconds")),
+                    "timeout_seconds": to_int_or_none(match.group("timeout_seconds")),
                 }
             )
 

@@ -16,6 +16,7 @@ class UnknownOutputsTests(unittest.TestCase):
             report_path = base_path / "parser_report.json"
             unknown_events_path = base_path / "unknown_events.json"
             unknown_summary_path = base_path / "unknown_summary.json"
+            unknown_samples_path = base_path / "unknown_samples.json"
 
             input_path.write_text(
                 "\n".join(
@@ -41,21 +42,25 @@ class UnknownOutputsTests(unittest.TestCase):
                 parser_report_output_path=report_path,
                 unknown_events_output_path=unknown_events_path,
                 unknown_summary_output_path=unknown_summary_path,
+                unknown_samples_output_path=unknown_samples_path,
             )
 
             unknown_events = json.loads(unknown_events_path.read_text(encoding="utf-8"))
             unknown_summary = json.loads(unknown_summary_path.read_text(encoding="utf-8"))
+            unknown_samples = json.loads(unknown_samples_path.read_text(encoding="utf-8"))
             parser_report = json.loads(report_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(len(unknown_events), 1)
+            self.assertEqual(len(unknown_events), 2)
             self.assertEqual(
                 sorted(unknown_events[0].keys()),
                 sorted(parser.UNKNOWN_EVENT_FIELDS),
             )
-            self.assertEqual(unknown_summary["total_unknown_events"], 1)
+            self.assertEqual(unknown_summary["total_unknown_events"], 2)
+            self.assertEqual(unknown_summary["unique_pattern_count"], 2)
             self.assertGreaterEqual(len(unknown_summary["top_raw_message_patterns"]), 1)
-            self.assertLessEqual(len(unknown_summary["sample_unknown_events"]), 50)
-            self.assertEqual(parser_report["unknown_events_exported_count"], 1)
+            self.assertGreaterEqual(len(unknown_samples), 1)
+            self.assertEqual(parser_report["unknown_events_exported_count"], 2)
+            self.assertEqual(parser_report["unknown_event_count_total"], 2)
             self.assertEqual(
                 Path(parser_report["generated_files"]["unknown_events"]).name,
                 "unknown_events.json",
@@ -63,6 +68,10 @@ class UnknownOutputsTests(unittest.TestCase):
             self.assertEqual(
                 Path(parser_report["generated_files"]["unknown_summary"]).name,
                 "unknown_summary.json",
+            )
+            self.assertEqual(
+                Path(parser_report["generated_files"]["unknown_samples"]).name,
+                "unknown_samples.json",
             )
 
     def test_new_patterns_are_not_exported_as_unknown(self) -> None:
@@ -74,6 +83,7 @@ class UnknownOutputsTests(unittest.TestCase):
             report_path = base_path / "parser_report.json"
             unknown_events_path = base_path / "unknown_events.json"
             unknown_summary_path = base_path / "unknown_summary.json"
+            unknown_samples_path = base_path / "unknown_samples.json"
 
             input_path.write_text(
                 "\n".join(
@@ -97,6 +107,7 @@ class UnknownOutputsTests(unittest.TestCase):
                 parser_report_output_path=report_path,
                 unknown_events_output_path=unknown_events_path,
                 unknown_summary_output_path=unknown_summary_path,
+                unknown_samples_output_path=unknown_samples_path,
             )
 
             unknown_events = json.loads(unknown_events_path.read_text(encoding="utf-8"))
@@ -105,6 +116,7 @@ class UnknownOutputsTests(unittest.TestCase):
 
             self.assertEqual(unknown_events, [])
             self.assertEqual(unknown_summary["total_unknown_events"], 0)
+            self.assertEqual(json.loads(unknown_samples_path.read_text(encoding="utf-8")), [])
             self.assertEqual(parser_report["unknown_event_count"], 0)
             self.assertEqual(parser_report["unknown_events_exported_count"], 0)
             self.assertIn("event_category_counts", parser_report)
