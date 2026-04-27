@@ -82,6 +82,16 @@ class ParsedEvent:
     unifi_source_ip: Optional[str] = None
     unifi_site: Optional[str] = None
     unifi_host: Optional[str] = None
+    src_ip: Optional[str] = None
+    admin_source_ip: Optional[str] = None
+    unifi_category: Optional[str] = None
+    settings_changes: Optional[str] = None
+    settings_value: Optional[str] = None
+    access_method: Optional[str] = None
+    settings_section: Optional[str] = None
+    settings_entry: Optional[str] = None
+    admin: Optional[str] = None
+    message: Optional[str] = None
     dns_buffer_flags: Optional[int] = None
     tx_attempts_current: Optional[int] = None
     tx_attempts_total: Optional[int] = None
