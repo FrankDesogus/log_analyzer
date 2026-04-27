@@ -257,6 +257,11 @@ def _derive_canonical_event_type(event_types: set[str]) -> str:
     has_auth = "auth_request" in event_types or "auth_response" in event_types
     has_disconnect = "disconnect" in event_types
     has_eapol_key = any(event_type == "eapol_key" for event_type in event_types)
+    has_assoc_flow = any(event_type in {"station_join", "assoc_success", "reassoc_response"} for event_type in event_types)
+    has_roam_flow = any(
+        event_type in {"reassoc_request", "reassoc_response", "assoc_success", "reassoc_processing_time"}
+        for event_type in event_types
+    )
     has_disconnect_flow = any(
         event_type in {"station_delete", "cfg80211_station_delete", "deauth_sent", "wifi_key_delete", "disconnect"}
         for event_type in event_types
@@ -268,6 +273,10 @@ def _derive_canonical_event_type(event_types: set[str]) -> str:
         return "wifi_auth_disconnect_sequence"
     if has_eapol_key:
         return "wifi_eapol_handshake_sequence"
+    if has_roam_flow:
+        return "wifi_roam_sequence"
+    if has_assoc_flow:
+        return "wifi_association_sequence"
     if has_auth and not has_disconnect:
         return "wifi_auth_sequence"
     if has_disconnect and event_types.issubset({"disconnect"}):
@@ -286,6 +295,10 @@ def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
     station_delete_count = cluster.event_type_counts.get("station_delete", 0)
     cfg80211_station_delete_count = cluster.event_type_counts.get("cfg80211_station_delete", 0)
     deauth_sent_count = cluster.event_type_counts.get("deauth_sent", 0)
+    station_join_count = cluster.event_type_counts.get("station_join", 0)
+    assoc_success_count = cluster.event_type_counts.get("assoc_success", 0)
+    reassoc_request_count = cluster.event_type_counts.get("reassoc_request", 0)
+    reassoc_response_count = cluster.event_type_counts.get("reassoc_response", 0)
 
     summary = {
         "auth_request_count": auth_request_count,
@@ -295,6 +308,10 @@ def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
         "station_delete_count": station_delete_count,
         "cfg80211_station_delete_count": cfg80211_station_delete_count,
         "deauth_sent_count": deauth_sent_count,
+        "station_join_count": station_join_count,
+        "assoc_success_count": assoc_success_count,
+        "reassoc_request_count": reassoc_request_count,
+        "reassoc_response_count": reassoc_response_count,
         "rssi_values": list(cluster.rssi_values),
         "rssi_min": min(cluster.rssi_values) if cluster.rssi_values else None,
         "rssi_max": max(cluster.rssi_values) if cluster.rssi_values else None,
