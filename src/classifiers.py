@@ -77,7 +77,14 @@ HOSTAPD_STA_REMOVE_RE = re.compile(
     r"\bra(?:i|x)?\d+:\s*STA\s+(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\s+WPA:\s*calling\s+hostapd_drv_sta_remove\(\)",
     re.IGNORECASE,
 )
-DRIVER_QUEUE_FLUSH_RE = re.compile(r"\bcb2,\s*flush one!\b", re.IGNORECASE)
+DRIVER_QUEUE_FLUSH_RE = re.compile(r"\bcb2,\s*flush one!", re.IGNORECASE)
+KERNEL_EMPTY_MESSAGE_RE = re.compile(r"^\s*\[\d+\.\d+\]\s*$")
+RADIUS_ACCOUNTING_START_RE = re.compile(
+    r"\bra(?:i|x)?\d+:\s*STA\s+(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\s+RADIUS:\s*starting accounting session\b",
+    re.IGNORECASE,
+)
+ROAMING_DECISION_RE = re.compile(r"\bRoaming Decision:\s*-?\d+\s*dBm\s+to\s+-?\d+\s*dBm\b", re.IGNORECASE)
+STP_PORT_STATUS_RE = re.compile(r"\bSTP-[A-Z]-PORTSTATUS:\s+\S+:\s+STP status \S+\b", re.IGNORECASE)
 DHCP_IP_ASSIGNMENT_RE = re.compile(
     r"\b(?:DHCPACK(?:\([^)]+\))?|sending\s+ACK\s+to)\b",
     re.IGNORECASE,
@@ -182,7 +189,15 @@ def classify_event_type(message: str) -> Optional[str]:
     if HOSTAPD_STA_REMOVE_RE.search(message):
         return "hostapd_sta_remove"
     if DRIVER_QUEUE_FLUSH_RE.search(message):
-        return "driver_queue_flush"
+        return "kernel_flush_event"
+    if KERNEL_EMPTY_MESSAGE_RE.search(message):
+        return "kernel_empty_message"
+    if RADIUS_ACCOUNTING_START_RE.search(message):
+        return "radius_accounting_start"
+    if ROAMING_DECISION_RE.search(message):
+        return "wifi_roaming_decision"
+    if STP_PORT_STATUS_RE.search(message):
+        return "stp_port_status"
     if DHCP_IP_ASSIGNMENT_RE.search(message):
         return "dhcp_ip_assignment"
     if LINK_UP_RE.search(message):
@@ -270,6 +285,16 @@ def classify_event_category(
         return "device_management"
     if event_type in {"cfg80211_assoc_request_handler", "driver_missing_station_entry", "station_table_insert", "station_table_delete", "driver_queue_flush"}:
         return "wifi_driver"
+    if event_type == "radius_accounting_start":
+        return "wifi_radius"
+    if event_type in {"sta_tracker_soft_failure"}:
+        return "wifi_association"
+    if event_type in {"wifi_roaming_decision"}:
+        return "wifi_roam"
+    if event_type in {"stp_port_status"}:
+        return "network_stp"
+    if event_type in {"kernel_flush_event", "kernel_empty_message"}:
+        return "system_event"
     if event_type in {"eapol_packet", "eapol_key"}:
         return "wifi_eapol"
     if event_type in {"wifi_key_add", "wifi_key_delete", "wifi_ap_key_add"}:

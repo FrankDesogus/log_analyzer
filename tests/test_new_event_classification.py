@@ -258,6 +258,63 @@ class NewEventClassificationTests(unittest.TestCase):
         self.assertEqual(event.radio, "rai2")
         self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
 
+    def test_radius_accounting_start(self) -> None:
+        event = self._parse_message(
+            "ra1: STA 76:27:03:0e:78:15 RADIUS: starting accounting session 216248ECCA644CED"
+        )
+        self.assertEqual(event.event_type, "radius_accounting_start")
+        self.assertEqual(event.event_category, "wifi_radius")
+        self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(event.mac, "76:27:03:0e:78:15")
+        self.assertEqual(event.radio, "ra1")
+        self.assertEqual(event.radius_session_id, "216248ECCA644CED")
+
+    def test_sta_tracker_soft_failure(self) -> None:
+        event = self._parse_message(
+            'stahtd[3888]: [STA-TRACKER].stahtd_dump_event(): {"message_type":"STA_ASSOC_TRACKER","mac":"76:27:03:0e:78:15","vap":"ra1","event_type":"soft failure","assoc_status":"0","ip_assign_type":"roamed","wpa_auth_delta":"88000","assoc_delta":"56000","auth_delta":"0","event_id":"1","auth_ts":"772918.013299","avg_rssi":"-57"}'
+        )
+        self.assertEqual(event.event_type, "sta_tracker_soft_failure")
+        self.assertEqual(event.event_category, "wifi_roam")
+        self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(event.radio, "ra1")
+        self.assertEqual(event.assoc_status, "0")
+        self.assertEqual(event.ip_assign_type, "roamed")
+        self.assertEqual(event.avg_rssi, -57)
+        self.assertEqual(event.internal_event_ts, "772918.013299")
+        self.assertEqual(event.wpa_auth_delta, "88000")
+        self.assertEqual(event.assoc_delta, "56000")
+        self.assertEqual(event.auth_delta, "0")
+
+    def test_roaming_decision(self) -> None:
+        event = self._parse_message(
+            "Ch. 1 (2.4 GHz, 20 MHz), -57 dBm. Roaming Decision: -81 dBm to -57 dBm."
+        )
+        self.assertEqual(event.event_type, "wifi_roaming_decision")
+        self.assertEqual(event.event_category, "wifi_roam")
+        self.assertEqual(event.channel, 1)
+        self.assertEqual(event.band, "2.4 GHz")
+        self.assertEqual(event.channel_width, "20 MHz")
+        self.assertEqual(event.rssi, -57)
+        self.assertEqual(event.roaming_from_rssi, -81)
+        self.assertEqual(event.roaming_to_rssi, -57)
+
+    def test_stp_port_status(self) -> None:
+        event = self._parse_message(
+            "STP-W-PORTSTATUS: te1/0/5: STP status Forwarding"
+        )
+        self.assertEqual(event.event_type, "stp_port_status")
+        self.assertEqual(event.event_category, "network_stp")
+        self.assertEqual(event.interface, "te1/0/5")
+        self.assertEqual(event.stp_status, "Forwarding")
+
+    def test_kernel_noise_events(self) -> None:
+        flush_event = self._parse_message("[772893.250085] cb2, flush one!")
+        self.assertEqual(flush_event.event_type, "kernel_flush_event")
+        self.assertEqual(flush_event.event_category, "system_event")
+        empty_event = self._parse_message("[773365.408224]")
+        self.assertEqual(empty_event.event_type, "kernel_empty_message")
+        self.assertEqual(empty_event.event_category, "system_event")
+
     def test_station_idle_probe_sta_dash_format(self) -> None:
         event = self._parse_message(
             "[772916.700301] rai2: Send NULL to STA-76:27:03:0e:78:15 idle(60) timeout(480)"

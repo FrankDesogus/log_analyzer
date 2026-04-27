@@ -81,6 +81,18 @@ EAP_PACKET_DETAILS_RE = re.compile(
     re.IGNORECASE,
 )
 STA_ASSOC_TRACKER_JSON_RE = re.compile(r"(\{.*\"message_type\"\s*:\s*\"STA_ASSOC_TRACKER\".*\})")
+RADIUS_ACCOUNTING_START_DETAILS_RE = re.compile(
+    r"(?P<radio>ra(?:i|x)?\d+):\s*STA\s+(?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+RADIUS:\s*starting accounting session\s+(?P<radius_session_id>[A-Za-z0-9]+)",
+    re.IGNORECASE,
+)
+ROAMING_DECISION_DETAILS_RE = re.compile(
+    r"Ch\.\s*(?P<channel>\d+)\s*\((?P<band>[\d.]+\s*GHz),\s*(?P<channel_width>\d+\s*MHz)\),\s*(?P<rssi>-?\d+)\s*dBm\.\s*Roaming Decision:\s*(?P<from_rssi>-?\d+)\s*dBm\s+to\s+(?P<to_rssi>-?\d+)\s*dBm\.",
+    re.IGNORECASE,
+)
+STP_PORT_STATUS_DETAILS_RE = re.compile(
+    r"STP-[A-Z]-PORTSTATUS:\s*(?P<interface>\S+):\s*STP status (?P<stp_status>\S+)",
+    re.IGNORECASE,
+)
 REASSOC_REQ_RE = re.compile(
     r"(?P<radio>rai?\d+):\s*\[recv\s+reassoc_req\]\.\s*TA:\[(?P<ta>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\],\s*RA:\[(?P<ra>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\]",
     re.IGNORECASE,
@@ -237,6 +249,8 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
     if "event_type" in additional_fields:
         event_type = additional_fields["event_type"]
         event_category = classify_event_category(message, process_name, event_type)
+    if "event_category" in additional_fields:
+        event_category = additional_fields["event_category"]
     if "ap_mac" in additional_fields:
         ap_mac = additional_fields["ap_mac"]
     if "mac" in additional_fields:
@@ -251,6 +265,9 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         radio = additional_fields["radio"]
     else:
         radio = extract_radio(message)
+    rssi = additional_fields.get("rssi")
+    if rssi is None:
+        rssi = extract_rssi(message)
 
     return ParsedEvent(
         parse_status="parsed",
@@ -270,7 +287,8 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         client_mac=client_mac,
         ap_mac=ap_mac,
         radio=radio,
-        rssi=extract_rssi(message),
+        rssi=rssi,
+        avg_rssi=additional_fields.get("avg_rssi"),
         internal_event_ts=internal_event_ts,
         internal_event_ts_float=internal_event_ts_float,
         internal_event_bucket=build_internal_event_bucket(internal_event_ts_float),
@@ -287,7 +305,12 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         dns_queries=additional_fields.get("dns_queries"),
         dns_servers=additional_fields.get("dns_servers"),
         assoc_status=additional_fields.get("assoc_status"),
+        ip_assign_type=additional_fields.get("ip_assign_type"),
+        sta_dc_reason=additional_fields.get("sta_dc_reason"),
         tracker_message_type=additional_fields.get("tracker_message_type"),
+        wpa_auth_delta=additional_fields.get("wpa_auth_delta"),
+        assoc_delta=additional_fields.get("assoc_delta"),
+        auth_delta=additional_fields.get("auth_delta"),
         eapol_direction=additional_fields.get("eapol_direction"),
         eapol_length=additional_fields.get("eapol_length"),
         eapol_source=additional_fields.get("eapol_source"),
@@ -320,6 +343,13 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         interface=additional_fields.get("interface"),
         port=additional_fields.get("port"),
         link_state=additional_fields.get("link_state"),
+        radius_session_id=additional_fields.get("radius_session_id"),
+        channel=additional_fields.get("channel"),
+        band=additional_fields.get("band"),
+        channel_width=additional_fields.get("channel_width"),
+        roaming_from_rssi=additional_fields.get("roaming_from_rssi"),
+        roaming_to_rssi=additional_fields.get("roaming_to_rssi"),
+        stp_status=additional_fields.get("stp_status"),
     )
 
 
@@ -1019,6 +1049,36 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                 "tracker_message_type": tracker_payload.get("message_type"),
             }
         )
+    if tracker_payload and str(tracker_payload.get("event_type") or "").strip().lower() == "soft failure":
+        client_mac = to_lower_or_none(tracker_payload.get("mac"))
+        radio = to_lower_or_none(tracker_payload.get("vap"))
+        ip_assign_type = tracker_payload.get("ip_assign_type")
+        sta_dc_reason = tracker_payload.get("sta_dc_reason")
+        event_category = "wifi_roam" if str(ip_assign_type or "").lower() == "roamed" or str(sta_dc_reason or "").lower() == "roam" else "wifi_association"
+        internal_event_ts = tracker_payload.get("auth_ts")
+        internal_event_ts_str = str(internal_event_ts) if internal_event_ts is not None else None
+        fields.update(
+            {
+                "event_type": "sta_tracker_soft_failure",
+                "event_category": event_category,
+                "client_mac": client_mac,
+                "mac": client_mac,
+                "radio": radio,
+                "vap": radio,
+                "process_name": "stahtd",
+                "assoc_status": str(tracker_payload.get("assoc_status")) if tracker_payload.get("assoc_status") is not None else None,
+                "ip_assign_type": str(ip_assign_type) if ip_assign_type is not None else None,
+                "sta_dc_reason": str(sta_dc_reason) if sta_dc_reason is not None else None,
+                "avg_rssi": to_int_or_none(tracker_payload.get("avg_rssi")),
+                "internal_event_ts": internal_event_ts_str,
+                "internal_event_ts_float": to_float_or_none(internal_event_ts_str),
+                "wpa_auth_delta": str(tracker_payload.get("wpa_auth_delta")) if tracker_payload.get("wpa_auth_delta") is not None else None,
+                "assoc_delta": str(tracker_payload.get("assoc_delta")) if tracker_payload.get("assoc_delta") is not None else None,
+                "auth_delta": str(tracker_payload.get("auth_delta")) if tracker_payload.get("auth_delta") is not None else None,
+                "sta_tracker_event_id": str(tracker_payload.get("event_id")) if tracker_payload.get("event_id") is not None else None,
+                "tracker_message_type": tracker_payload.get("message_type"),
+            }
+        )
 
     if event_type == "dns_timeout" and not tracker_payload:
         match = DNS_TIMEOUT_DETAILS_RE.search(message)
@@ -1397,6 +1457,43 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
         if match:
             fields["driver_context"] = match.group("context")
 
+    if event_type == "radius_accounting_start":
+        match = RADIUS_ACCOUNTING_START_DETAILS_RE.search(message)
+        if match:
+            client_mac = match.group("client_mac").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": match.group("radio").lower(),
+                    "radius_session_id": match.group("radius_session_id"),
+                }
+            )
+
+    if event_type == "wifi_roaming_decision":
+        match = ROAMING_DECISION_DETAILS_RE.search(message)
+        if match:
+            fields.update(
+                {
+                    "channel": to_int_or_none(match.group("channel")),
+                    "band": normalize_whitespace(match.group("band")),
+                    "channel_width": normalize_whitespace(match.group("channel_width")),
+                    "rssi": to_int_or_none(match.group("rssi")),
+                    "roaming_from_rssi": to_int_or_none(match.group("from_rssi")),
+                    "roaming_to_rssi": to_int_or_none(match.group("to_rssi")),
+                }
+            )
+
+    if event_type == "stp_port_status":
+        match = STP_PORT_STATUS_DETAILS_RE.search(message)
+        if match:
+            fields.update(
+                {
+                    "interface": match.group("interface"),
+                    "stp_status": match.group("stp_status"),
+                }
+            )
+
     if event_type == "dhcp_ip_assignment":
         client_mac = extract_mac(message)
         if client_mac:
@@ -1407,13 +1504,31 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
 
 
 def extract_sta_assoc_tracker_payload(message: str) -> Optional[dict[str, Any]]:
+    marker = "stahtd_dump_event():"
+    marker_index = message.find(marker)
+    if marker_index < 0:
+        return None
+    json_part = message[marker_index + len(marker) :].strip()
+    if not json_part:
+        return None
+
+    try:
+        payload = json.loads(json_part)
+        if isinstance(payload, dict):
+            return payload
+    except json.JSONDecodeError:
+        pass
+
     match = STA_ASSOC_TRACKER_JSON_RE.search(message)
     if not match:
         return None
     try:
-        return json.loads(match.group(1))
+        payload = json.loads(match.group(1))
+        if isinstance(payload, dict):
+            return payload
     except json.JSONDecodeError:
         return None
+    return None
 
 
 def extract_indexed_tracker_values(payload: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -1447,3 +1562,9 @@ def to_lower_or_none(value: Any) -> Optional[str]:
     if value is None:
         return None
     return str(value).lower()
+
+
+def normalize_whitespace(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return " ".join(str(value).split())
