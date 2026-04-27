@@ -249,6 +249,54 @@ class NewEventClassificationTests(unittest.TestCase):
         self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
         self.assertEqual(event.ap_mac, "0e:ea:14:a0:22:a7")
 
+    def test_device_config_version_change(self) -> None:
+        event = self._parse_message(
+            "mcad[3901]: ace_reporter.reporter_handle_response_json(): cfgversion: 1735842944 -> 1735842950"
+        )
+        self.assertEqual(event.event_type, "device_config_version_change")
+        self.assertEqual(event.event_category, "device_config")
+        self.assertEqual(event.old_config_version, "1735842944")
+        self.assertEqual(event.new_config_version, "1735842950")
+
+    def test_unifi_cef_config_modified(self) -> None:
+        event = self._parse_message(
+            'CEF:0|Ubiquiti|UniFi Network|8.0.7|100|Config Modified|5|cs2=web cs3=services cs4=advanced_features suser=admin start=1713620478 src=10.0.0.9 site=default host=udm'
+        )
+        self.assertEqual(event.event_type, "unifi_config_audit")
+        self.assertEqual(event.event_category, "device_config")
+        self.assertEqual(event.unifi_access_method, "web")
+        self.assertEqual(event.unifi_settings_section, "services")
+        self.assertEqual(event.unifi_settings_entry, "advanced_features")
+        self.assertEqual(event.unifi_admin, "admin")
+        self.assertEqual(event.unifi_source_ip, "10.0.0.9")
+        self.assertEqual(event.unifi_site, "default")
+        self.assertEqual(event.unifi_host, "udm")
+
+    def test_dns_buffer_error(self) -> None:
+        event = self._parse_message("[773999.100000] [STA_TRACKER] DNS buffer error: flags 32")
+        self.assertEqual(event.event_type, "dns_buffer_error")
+        self.assertEqual(event.event_category, "network_dns")
+        self.assertEqual(event.dns_buffer_flags, 32)
+
+    def test_wifi_tx_retry_burst(self) -> None:
+        event = self._parse_message(
+            "[774000.200000] rai2: StaTXRetryBurstPeriodicExec MAC=76:27:03:0e:78:15 txAttemptCur=5 txAttemptTotal=25 txRetryCur=2 txRetryTotal=7 rssiCur=-61 rssiPrev=-59 lastTxRate=866M burstRatioCur=40 burstRatioTotal=30 burstCnt=3"
+        )
+        self.assertEqual(event.event_type, "wifi_tx_retry_burst")
+        self.assertEqual(event.event_category, "wifi_quality")
+        self.assertEqual(event.radio, "rai2")
+        self.assertEqual(event.client_mac, "76:27:03:0e:78:15")
+        self.assertEqual(event.tx_attempts_current, 5)
+        self.assertEqual(event.tx_attempts_total, 25)
+        self.assertEqual(event.tx_retries_current, 2)
+        self.assertEqual(event.tx_retries_total, 7)
+        self.assertEqual(event.rssi_current, -61)
+        self.assertEqual(event.rssi_previous, -59)
+        self.assertEqual(event.last_tx_rate, "866M")
+        self.assertEqual(event.burst_ratio_current, 40)
+        self.assertEqual(event.burst_ratio_total, 30)
+        self.assertEqual(event.burst_count, 3)
+
     def test_hostapd_sta_remove(self) -> None:
         event = self._parse_message(
             "rai2: STA 76:27:03:0e:78:15 WPA: calling hostapd_drv_sta_remove(), ../src/ap/sta_info.c:ap_free_sta:183"

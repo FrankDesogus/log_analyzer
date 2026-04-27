@@ -176,6 +176,25 @@ ACE_REPORTER_SAVE_CONFIG_DETAILS_RE = re.compile(
     r"ace_reporter\.reporter_save_config\(\):\s*(?P<config_key>[^:]+):\s*(?P<config_value>.+)$",
     re.IGNORECASE,
 )
+MCAD_CFGVERSION_CHANGE_DETAILS_RE = re.compile(
+    r"ace_reporter\.reporter_handle_response_json\(\):\s*cfgversion:\s*(?P<old_config_version>[^\s]+)\s*->\s*(?P<new_config_version>[^\s]+)",
+    re.IGNORECASE,
+)
+DNS_BUFFER_ERROR_DETAILS_RE = re.compile(
+    r"\[STA_TRACKER\]\s*DNS buffer error:\s*flags\s+(?P<dns_buffer_flags>\d+)\b",
+    re.IGNORECASE,
+)
+UNIFI_CEF_CONFIG_MODIFIED_DETAILS_RE = re.compile(
+    r"\bCEF:0\|Ubiquiti\|UniFi Network\|(?P<unifi_version>[^|]*)\|(?P<unifi_signature_id>[^|]*)\|Config Modified\|(?P<unifi_severity>[^|]*)\|(?P<extensions>.*)$",
+    re.IGNORECASE,
+)
+KEY_VALUE_TOKEN_RE = re.compile(
+    r"(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)=(?P<value>\"[^\"]*\"|\S+)"
+)
+WIFI_TX_RETRY_BURST_DETAILS_RE = re.compile(
+    r"(?:(?P<radio>ra(?:i|x)?\d+):\s*)?StaTXRetryBurstPeriodicExec.*?(?:MAC|STA|sta)[:=](?P<client_mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}).*?(?:cur(?:rent)?_?tx(?:_?attempts)?|txAttemptCur)[:=](?P<tx_attempts_current>\d+).*?(?:tot(?:al)?_?tx(?:_?attempts)?|txAttemptTotal)[:=](?P<tx_attempts_total>\d+).*?(?:cur(?:rent)?_?retry(?:_?count)?|txRetryCur)[:=](?P<tx_retries_current>\d+).*?(?:tot(?:al)?_?retry(?:_?count)?|txRetryTotal)[:=](?P<tx_retries_total>\d+).*?(?:rssi(?:_?cur(?:rent)?)?)[:=](?P<rssi_current>-?\d+).*?(?:rssi(?:_?prev(?:ious)?)?)[:=](?P<rssi_previous>-?\d+).*?(?:last_?tx_?rate|lastTxRate)[:=](?P<last_tx_rate>[A-Za-z0-9./_-]+).*?(?:burst_?ratio_?cur(?:rent)?|burstRatioCur)[:=](?P<burst_ratio_current>\d+).*?(?:burst_?ratio_?tot(?:al)?|burstRatioTotal)[:=](?P<burst_ratio_total>\d+).*?(?:burst_?count|burstCnt)[:=](?P<burst_count>\d+)",
+    re.IGNORECASE,
+)
 CLIENT_IP_EVENT_RE = re.compile(
     r"\b(?:EVENT_STA_IP|STA_IP)\b.*?\b(?:ip|IP)\s*[:=]\s*(?P<client_ip>(?:\d{1,3}\.){3}\d{1,3})",
     re.IGNORECASE,
@@ -339,6 +358,27 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         sta_tracker_event_id=additional_fields.get("sta_tracker_event_id"),
         config_key=additional_fields.get("config_key"),
         config_value=additional_fields.get("config_value"),
+        old_config_version=additional_fields.get("old_config_version"),
+        new_config_version=additional_fields.get("new_config_version"),
+        unifi_access_method=additional_fields.get("unifi_access_method"),
+        unifi_settings_section=additional_fields.get("unifi_settings_section"),
+        unifi_settings_entry=additional_fields.get("unifi_settings_entry"),
+        unifi_admin=additional_fields.get("unifi_admin"),
+        unifi_utc_time=additional_fields.get("unifi_utc_time"),
+        unifi_source_ip=additional_fields.get("unifi_source_ip"),
+        unifi_site=additional_fields.get("unifi_site"),
+        unifi_host=additional_fields.get("unifi_host"),
+        dns_buffer_flags=additional_fields.get("dns_buffer_flags"),
+        tx_attempts_current=additional_fields.get("tx_attempts_current"),
+        tx_attempts_total=additional_fields.get("tx_attempts_total"),
+        tx_retries_current=additional_fields.get("tx_retries_current"),
+        tx_retries_total=additional_fields.get("tx_retries_total"),
+        rssi_current=additional_fields.get("rssi_current"),
+        rssi_previous=additional_fields.get("rssi_previous"),
+        last_tx_rate=additional_fields.get("last_tx_rate"),
+        burst_ratio_current=additional_fields.get("burst_ratio_current"),
+        burst_ratio_total=additional_fields.get("burst_ratio_total"),
+        burst_count=additional_fields.get("burst_count"),
         client_ip=additional_fields.get("client_ip"),
         interface=additional_fields.get("interface"),
         port=additional_fields.get("port"),
@@ -512,6 +552,7 @@ def build_parser_report(
     unknown_with_client_mac_count = sum(1 for event in unknown_events_full if event.get("client_mac"))
     unknown_with_radio_count = sum(1 for event in unknown_events_full if event.get("radio"))
     canonical_unknown_stats = summarize_canonical_unknown_sequences(canonical_events)
+    canonical_gap_stats = analyze_canonical_sequence_gaps(canonical_events, parsed_events)
 
     return {
         "total_raw_events": len(parsed_events),
@@ -546,6 +587,11 @@ def build_parser_report(
         "known_event_types_inside_unknown_sequences": canonical_unknown_stats[
             "known_event_types_inside_unknown_sequences"
         ],
+        "canonical_sequences_with_large_line_gap": canonical_gap_stats["canonical_sequences_with_large_line_gap"],
+        "canonical_sequences_with_large_timestamp_gap": canonical_gap_stats["canonical_sequences_with_large_timestamp_gap"],
+        "max_raw_line_gap_in_canonical_sequence": canonical_gap_stats["max_raw_line_gap_in_canonical_sequence"],
+        "max_timestamp_gap_seconds_in_canonical_sequence": canonical_gap_stats["max_timestamp_gap_seconds_in_canonical_sequence"],
+        "suspicious_canonical_sequences_sample": canonical_gap_stats["suspicious_canonical_sequences_sample"],
         "unknown_top_patterns": unknown_summary.get("top_patterns", []),
         "unknown_by_source_ip": dict(unknown_by_source_ip),
         "unknown_by_process_name": dict(unknown_by_process_name),
@@ -605,6 +651,7 @@ def build_quality_report(
     )
 
     canonical_unknown_stats = summarize_canonical_unknown_sequences(canonical_events)
+    canonical_gap_stats = analyze_canonical_sequence_gaps(canonical_events, parsed_events)
     wifi_security_sequences = [
         event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_security_sequence"
     ]
@@ -631,6 +678,11 @@ def build_quality_report(
             "known_event_types_inside_unknown_sequences"
         ],
         "top_unknown_patterns": unknown_summary.get("top_patterns", []),
+        "canonical_sequences_with_large_line_gap": canonical_gap_stats["canonical_sequences_with_large_line_gap"],
+        "canonical_sequences_with_large_timestamp_gap": canonical_gap_stats["canonical_sequences_with_large_timestamp_gap"],
+        "max_raw_line_gap_in_canonical_sequence": canonical_gap_stats["max_raw_line_gap_in_canonical_sequence"],
+        "max_timestamp_gap_seconds_in_canonical_sequence": canonical_gap_stats["max_timestamp_gap_seconds_in_canonical_sequence"],
+        "suspicious_canonical_sequences_sample": canonical_gap_stats["suspicious_canonical_sequences_sample"],
     }
 
 
@@ -654,6 +706,74 @@ def summarize_canonical_unknown_sequences(canonical_events: list[dict[str, Any]]
         "canonical_unknown_sequences_truly_unknown": len(unknown_sequences) - len(unknown_sequences_with_known_types),
         "canonical_unknown_sequences_with_known_event_types": len(unknown_sequences_with_known_types),
         "known_event_types_inside_unknown_sequences": dict(known_types_counter),
+    }
+
+
+def analyze_canonical_sequence_gaps(
+    canonical_events: list[dict[str, Any]],
+    parsed_events: list[dict[str, Any]],
+    line_gap_threshold: int = 500,
+    timestamp_gap_threshold_seconds: float = 5.0,
+    sample_limit: int = 20,
+) -> dict[str, Any]:
+    max_line_gap = 0
+    max_ts_gap = 0.0
+    large_line_gap_count = 0
+    large_ts_gap_count = 0
+    suspicious_samples: list[dict[str, Any]] = []
+
+    for canonical_event in canonical_events:
+        raw_line_numbers = [
+            int(value)
+            for value in canonical_event.get("raw_line_numbers", [])
+            if isinstance(value, int) or (isinstance(value, str) and value.isdigit())
+        ]
+        line_gap = 0
+        if len(raw_line_numbers) > 1:
+            sorted_lines = sorted(raw_line_numbers)
+            line_gap = max(
+                (sorted_lines[idx + 1] - sorted_lines[idx])
+                for idx in range(len(sorted_lines) - 1)
+            )
+        max_line_gap = max(max_line_gap, line_gap)
+        has_large_line_gap = line_gap > line_gap_threshold
+        if has_large_line_gap:
+            large_line_gap_count += 1
+
+        raw_event_indexes = canonical_event.get("raw_event_indexes", [])
+        timestamps: list[float] = []
+        for raw_idx in raw_event_indexes:
+            if not isinstance(raw_idx, int) or raw_idx < 0 or raw_idx >= len(parsed_events):
+                continue
+            normalized_timestamp = parsed_events[raw_idx].get("normalized_timestamp")
+            epoch = _normalized_ts_to_epoch(normalized_timestamp)
+            if epoch is not None:
+                timestamps.append(epoch)
+        ts_gap = max(timestamps) - min(timestamps) if len(timestamps) > 1 else 0.0
+        max_ts_gap = max(max_ts_gap, ts_gap)
+        has_large_ts_gap = ts_gap > timestamp_gap_threshold_seconds
+        if has_large_ts_gap:
+            large_ts_gap_count += 1
+
+        if (has_large_line_gap or has_large_ts_gap) and len(suspicious_samples) < sample_limit:
+            suspicious_samples.append(
+                {
+                    "canonical_event_id": canonical_event.get("canonical_event_id"),
+                    "canonical_event_type": canonical_event.get("canonical_event_type"),
+                    "raw_event_count": canonical_event.get("raw_event_count"),
+                    "max_line_gap": line_gap,
+                    "timestamp_gap_seconds": round(ts_gap, 3),
+                    "raw_line_numbers": raw_line_numbers[:10],
+                    "event_types_seen": canonical_event.get("event_types_seen", []),
+                }
+            )
+
+    return {
+        "canonical_sequences_with_large_line_gap": large_line_gap_count,
+        "canonical_sequences_with_large_timestamp_gap": large_ts_gap_count,
+        "max_raw_line_gap_in_canonical_sequence": max_line_gap,
+        "max_timestamp_gap_seconds_in_canonical_sequence": round(max_ts_gap, 3),
+        "suspicious_canonical_sequences_sample": suspicious_samples,
     }
 
 
@@ -932,6 +1052,15 @@ def normalize_timestamp(timestamp: Optional[str]) -> Optional[str]:
     return normalized.isoformat()
 
 
+def _normalized_ts_to_epoch(normalized_timestamp: Optional[str]) -> Optional[float]:
+    if not normalized_timestamp:
+        return None
+    try:
+        return datetime.fromisoformat(str(normalized_timestamp)).timestamp()
+    except ValueError:
+        return None
+
+
 def resolve_log_year() -> Optional[int]:
     configured_year = os.environ.get("UNIFI_LOG_YEAR")
     if configured_year is not None:
@@ -984,6 +1113,19 @@ def build_internal_event_bucket(
     bucket_start = math.floor(internal_event_ts_float / bucket_seconds) * bucket_seconds
     decimals = _bucket_decimal_places(bucket_ms)
     return f"{bucket_start:.{decimals}f}"
+
+
+def parse_key_value_tokens(raw_extensions: Optional[str]) -> dict[str, str]:
+    if not raw_extensions:
+        return {}
+    extracted: dict[str, str] = {}
+    for match in KEY_VALUE_TOKEN_RE.finditer(raw_extensions):
+        key = match.group("key")
+        value = match.group("value")
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        extracted[key] = value
+    return extracted
 
 
 def extract_additional_event_fields(message: str, event_type: Optional[str]) -> dict[str, Any]:
@@ -1197,6 +1339,17 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                 }
             )
 
+    if event_type == "device_config_version_change":
+        match = MCAD_CFGVERSION_CHANGE_DETAILS_RE.search(message)
+        if match:
+            fields.update(
+                {
+                    "process_name": "mcad",
+                    "old_config_version": match.group("old_config_version"),
+                    "new_config_version": match.group("new_config_version"),
+                }
+            )
+
     if event_type == "device_config_report":
         match = ACE_REPORTER_SAVE_CONFIG_DETAILS_RE.search(message)
         if match:
@@ -1205,6 +1358,49 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                     "process_name": "mcad",
                     "config_key": match.group("config_key").strip(),
                     "config_value": match.group("config_value").strip(),
+                }
+            )
+    if event_type == "unifi_config_audit":
+        match = UNIFI_CEF_CONFIG_MODIFIED_DETAILS_RE.search(message)
+        if match:
+            kv = parse_key_value_tokens(match.group("extensions"))
+            fields.update(
+                {
+                    "unifi_access_method": kv.get("cs2"),
+                    "unifi_settings_section": kv.get("cs3"),
+                    "unifi_settings_entry": kv.get("cs4"),
+                    "unifi_admin": kv.get("suser"),
+                    "unifi_utc_time": kv.get("start"),
+                    "unifi_source_ip": kv.get("src"),
+                    "unifi_site": kv.get("site"),
+                    "unifi_host": kv.get("host"),
+                }
+            )
+
+    if event_type == "dns_buffer_error":
+        match = DNS_BUFFER_ERROR_DETAILS_RE.search(message)
+        if match:
+            fields["dns_buffer_flags"] = to_int_or_none(match.group("dns_buffer_flags"))
+
+    if event_type == "wifi_tx_retry_burst":
+        match = WIFI_TX_RETRY_BURST_DETAILS_RE.search(message)
+        if match:
+            client_mac = to_lower_or_none(match.group("client_mac"))
+            fields.update(
+                {
+                    "radio": to_lower_or_none(match.group("radio")) or extract_radio(message),
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "tx_attempts_current": to_int_or_none(match.group("tx_attempts_current")),
+                    "tx_attempts_total": to_int_or_none(match.group("tx_attempts_total")),
+                    "tx_retries_current": to_int_or_none(match.group("tx_retries_current")),
+                    "tx_retries_total": to_int_or_none(match.group("tx_retries_total")),
+                    "rssi_current": to_int_or_none(match.group("rssi_current")),
+                    "rssi_previous": to_int_or_none(match.group("rssi_previous")),
+                    "last_tx_rate": match.group("last_tx_rate"),
+                    "burst_ratio_current": to_int_or_none(match.group("burst_ratio_current")),
+                    "burst_ratio_total": to_int_or_none(match.group("burst_ratio_total")),
+                    "burst_count": to_int_or_none(match.group("burst_count")),
                 }
             )
     if event_type == "config_setparam":

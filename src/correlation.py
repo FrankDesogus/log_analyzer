@@ -339,9 +339,13 @@ def _derive_canonical_event_type(
         for event_type in event_types
     )
     has_dns_anomaly = "dns_timeout" in event_types
+    has_dns_buffer_error = "dns_buffer_error" in event_types
     has_device_mgmt_report = "device_config_report" in event_types
+    has_device_config_version_change = "device_config_version_change" in event_types
+    has_unifi_config_audit = "unifi_config_audit" in event_types
     has_wifi_scan_error = "wifi_scan_error" in event_types
     has_system_maintenance = "system_cache_drop" in event_types
+    has_wifi_quality_retry_burst = "wifi_tx_retry_burst" in event_types
     has_wifi_security_flow = any(
         event_type in {"wifi_key_add", "wifi_ap_key_add"} for event_type in event_types
     )
@@ -376,6 +380,8 @@ def _derive_canonical_event_type(
         return "system_logging_sequence"
     if has_device_config_flow:
         return "device_config_sequence"
+    if has_device_config_version_change or has_unifi_config_audit:
+        return "device_config_sequence"
     if has_wifi_scan_error:
         return "wifi_system_sequence"
     if has_device_mgmt_report or has_device_mgmt_process or has_device_mgmt_category:
@@ -390,6 +396,8 @@ def _derive_canonical_event_type(
         return "wifi_client_lifecycle_sequence"
     if has_dns_anomaly:
         return "network_dns_anomaly_sequence"
+    if has_dns_buffer_error:
+        return "network_dns_anomaly_sequence"
     if has_assoc_flow:
         return "wifi_association_sequence"
     if has_auth and not has_disconnect:
@@ -400,6 +408,8 @@ def _derive_canonical_event_type(
         return "wifi_disconnect_sequence"
     if has_wifi_security_flow:
         return "wifi_security_sequence"
+    if has_wifi_quality_retry_burst:
+        return "wifi_quality_sequence"
     if has_link_flow:
         return "network_link_sequence"
     if known_event_types:
@@ -423,7 +433,11 @@ def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
     fast_transition_roam_count = cluster.event_type_counts.get("fast_transition_roam", 0)
     assoc_tracker_failure_count = cluster.event_type_counts.get("assoc_tracker_failure", 0)
     dns_timeout_count = cluster.event_type_counts.get("dns_timeout", 0)
+    dns_buffer_error_count = cluster.event_type_counts.get("dns_buffer_error", 0)
     device_config_report_count = cluster.event_type_counts.get("device_config_report", 0)
+    device_config_version_change_count = cluster.event_type_counts.get("device_config_version_change", 0)
+    unifi_config_audit_count = cluster.event_type_counts.get("unifi_config_audit", 0)
+    wifi_tx_retry_burst_count = cluster.event_type_counts.get("wifi_tx_retry_burst", 0)
     wifi_key_add_count = cluster.event_type_counts.get("wifi_key_add", 0)
     wifi_ap_key_add_count = cluster.event_type_counts.get("wifi_ap_key_add", 0)
 
@@ -442,7 +456,11 @@ def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
         "fast_transition_roam_count": fast_transition_roam_count,
         "assoc_tracker_failure_count": assoc_tracker_failure_count,
         "dns_timeout_count": dns_timeout_count,
+        "dns_buffer_error_count": dns_buffer_error_count,
         "device_config_report_count": device_config_report_count,
+        "device_config_version_change_count": device_config_version_change_count,
+        "unifi_config_audit_count": unifi_config_audit_count,
+        "wifi_tx_retry_burst_count": wifi_tx_retry_burst_count,
         "wifi_key_add_count": wifi_key_add_count,
         "wifi_ap_key_add_count": wifi_ap_key_add_count,
         "rssi_values": list(cluster.rssi_values),
