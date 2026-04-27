@@ -196,6 +196,32 @@ class CanonicalCorrelationTests(unittest.TestCase):
                     "process_name": "mcad",
                     "internal_event_ts_float": 5000.001,
                 },
+                {
+                    "line_number": 54,
+                    "source_ip": "10.0.0.54",
+                    "event_type": "device_config_version_change",
+                    "event_category": "device_config",
+                    "process_name": "mcad",
+                    "internal_event_ts_float": 5000.101,
+                },
+                {
+                    "line_number": 55,
+                    "source_ip": "10.0.0.55",
+                    "event_type": "dns_buffer_error",
+                    "event_category": "network_dns",
+                    "process_name": "kernel",
+                    "internal_event_ts_float": 5000.201,
+                },
+                {
+                    "line_number": 56,
+                    "source_ip": "10.0.0.56",
+                    "client_mac": "76:27:03:0e:78:15",
+                    "radio": "rai2",
+                    "event_type": "wifi_tx_retry_burst",
+                    "event_category": "wifi_quality",
+                    "process_name": "kernel",
+                    "internal_event_ts_float": 5000.301,
+                },
             ]
         )
         canonical_types = {event["canonical_event_type"] for event in payload["canonical_events"]}
@@ -203,6 +229,7 @@ class CanonicalCorrelationTests(unittest.TestCase):
         self.assertIn("wifi_assoc_failure_sequence", canonical_types)
         self.assertIn("network_dns_anomaly_sequence", canonical_types)
         self.assertIn("device_config_sequence", canonical_types)
+        self.assertIn("wifi_quality_sequence", canonical_types)
 
     def test_known_disconnect_related_events_are_not_unknown(self) -> None:
         payload = build_canonical_events(

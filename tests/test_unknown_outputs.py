@@ -7,6 +7,38 @@ from src import parser
 
 
 class UnknownOutputsTests(unittest.TestCase):
+    def test_quality_report_includes_canonical_gap_metrics(self) -> None:
+        parsed_events = [
+            {"normalized_timestamp": "2026-04-23T12:00:00", "parse_status": "parsed", "event_type": "unknown", "event_category": "unknown"},
+            {"normalized_timestamp": "2026-04-23T12:00:08", "parse_status": "parsed", "event_type": "unknown", "event_category": "unknown"},
+        ]
+        canonical_events = [
+            {
+                "canonical_event_id": "canon-1",
+                "canonical_event_type": "wifi_unknown_sequence",
+                "raw_event_count": 2,
+                "raw_line_numbers": [10, 900],
+                "raw_event_indexes": [0, 1],
+                "event_types_seen": ["unknown"],
+            }
+        ]
+        unknown_events = [{"event_type": None, "event_category": "unknown"}]
+        unknown_summary = {"total_unknown_events": 1, "unique_pattern_count": 1, "top_patterns": []}
+
+        report = parser.build_quality_report(
+            parsed_events=parsed_events,
+            canonical_events=canonical_events,
+            unknown_events=unknown_events,
+            unknown_summary=unknown_summary,
+            parser_report={"unknown_event_count": 1},
+        )
+
+        self.assertEqual(report["canonical_sequences_with_large_line_gap"], 1)
+        self.assertEqual(report["canonical_sequences_with_large_timestamp_gap"], 1)
+        self.assertEqual(report["max_raw_line_gap_in_canonical_sequence"], 890)
+        self.assertEqual(report["max_timestamp_gap_seconds_in_canonical_sequence"], 8.0)
+        self.assertGreaterEqual(len(report["suspicious_canonical_sequences_sample"]), 1)
+
     def test_unknown_outputs_are_generated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base_path = Path(tmp)

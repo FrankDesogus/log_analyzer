@@ -128,6 +128,22 @@ PROCESS_LIFECYCLE_EVENT_RE = re.compile(
     r"\b(?:procd|process\b.*\b(?:start|stop|restart|sigterm|exit))\b",
     re.IGNORECASE,
 )
+MCAD_CFGVERSION_CHANGE_RE = re.compile(
+    r"\bace_reporter\.reporter_handle_response_json\(\):\s*cfgversion:\s*[^\s]+\s*->\s*[^\s]+\b",
+    re.IGNORECASE,
+)
+UNIFI_CEF_CONFIG_AUDIT_RE = re.compile(
+    r"\bCEF:0\|Ubiquiti\|UniFi Network\|[^\n]*\|Config Modified\|",
+    re.IGNORECASE,
+)
+DNS_BUFFER_ERROR_RE = re.compile(
+    r"\[STA_TRACKER\]\s*DNS buffer error:\s*flags\s+\d+\b",
+    re.IGNORECASE,
+)
+WIFI_TX_RETRY_BURST_RE = re.compile(
+    r"\bStaTXRetryBurstPeriodicExec\b",
+    re.IGNORECASE,
+)
 
 
 def classify_event_type(message: str) -> Optional[str]:
@@ -226,6 +242,14 @@ def classify_event_type(message: str) -> Optional[str]:
         return "process_sigterm_timeout"
     if PROCESS_LIFECYCLE_EVENT_RE.search(message):
         return "process_lifecycle_event"
+    if MCAD_CFGVERSION_CHANGE_RE.search(message):
+        return "device_config_version_change"
+    if UNIFI_CEF_CONFIG_AUDIT_RE.search(message):
+        return "unifi_config_audit"
+    if DNS_BUFFER_ERROR_RE.search(message):
+        return "dns_buffer_error"
+    if WIFI_TX_RETRY_BURST_RE.search(message):
+        return "wifi_tx_retry_burst"
     if CFG80211_ASSOC_REQ_HANDLER_RE.search(message):
         return "cfg80211_assoc_request_handler"
     if EAPOL_KEY_RE.search(message):
@@ -271,6 +295,8 @@ def classify_event_category(
         return "wifi_auth"
     if event_type == "dns_timeout":
         return "network_dns"
+    if event_type == "dns_buffer_error":
+        return "network_dns"
     if event_type == "wifi_scan_error":
         return "wifi_system"
     if event_type in {"reassoc_request", "reassoc_response", "reassoc_processing_time"}:
@@ -281,8 +307,12 @@ def classify_event_category(
         return "wifi_quality"
     if event_type == "assoc_tracker_failure":
         return "wifi_association"
+    if event_type == "wifi_tx_retry_burst":
+        return "wifi_quality"
     if event_type == "device_config_report":
         return "device_management"
+    if event_type in {"device_config_version_change", "unifi_config_audit"}:
+        return "device_config"
     if event_type in {"cfg80211_assoc_request_handler", "driver_missing_station_entry", "station_table_insert", "station_table_delete", "driver_queue_flush"}:
         return "wifi_driver"
     if event_type == "radius_accounting_start":
