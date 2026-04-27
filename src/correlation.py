@@ -256,12 +256,23 @@ def _derive_canonical_event_type(event_types: set[str]) -> str:
 
     has_auth = "auth_request" in event_types or "auth_response" in event_types
     has_disconnect = "disconnect" in event_types
+    has_eapol_key = any(event_type == "eapol_key" for event_type in event_types)
+    has_disconnect_flow = any(
+        event_type in {"station_delete", "cfg80211_station_delete", "deauth_sent", "wifi_key_delete", "disconnect"}
+        for event_type in event_types
+    )
 
     if has_auth and has_disconnect:
         return "wifi_auth_disconnect_sequence"
+    if has_auth and has_disconnect_flow:
+        return "wifi_auth_disconnect_sequence"
+    if has_eapol_key:
+        return "wifi_eapol_handshake_sequence"
     if has_auth and not has_disconnect:
         return "wifi_auth_sequence"
     if has_disconnect and event_types.issubset({"disconnect"}):
+        return "wifi_disconnect_sequence"
+    if has_disconnect_flow:
         return "wifi_disconnect_sequence"
 
     return "wifi_unknown_sequence"
@@ -271,11 +282,19 @@ def _build_sequence_summary(cluster: _ClusterState) -> dict[str, Any]:
     auth_request_count = cluster.event_type_counts.get("auth_request", 0)
     auth_response_count = cluster.event_type_counts.get("auth_response", 0)
     disconnect_count = cluster.event_type_counts.get("disconnect", 0)
+    eapol_key_count = cluster.event_type_counts.get("eapol_key", 0)
+    station_delete_count = cluster.event_type_counts.get("station_delete", 0)
+    cfg80211_station_delete_count = cluster.event_type_counts.get("cfg80211_station_delete", 0)
+    deauth_sent_count = cluster.event_type_counts.get("deauth_sent", 0)
 
     summary = {
         "auth_request_count": auth_request_count,
         "auth_response_count": auth_response_count,
         "disconnect_count": disconnect_count,
+        "eapol_key_count": eapol_key_count,
+        "station_delete_count": station_delete_count,
+        "cfg80211_station_delete_count": cfg80211_station_delete_count,
+        "deauth_sent_count": deauth_sent_count,
         "rssi_values": list(cluster.rssi_values),
         "rssi_min": min(cluster.rssi_values) if cluster.rssi_values else None,
         "rssi_max": max(cluster.rssi_values) if cluster.rssi_values else None,

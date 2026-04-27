@@ -128,6 +128,36 @@ class CanonicalCorrelationTests(unittest.TestCase):
         payload = build_canonical_events(events, max_gap_ms=15)
         self.assertEqual(len(payload["canonical_events"]), 2)
 
+    def test_eapol_keys_generate_handshake_canonical_type(self) -> None:
+        events = [
+            {
+                "line_number": 40,
+                "source_ip": "10.0.0.40",
+                "client_mac": "76:27:03:0e:78:15",
+                "ap_mac": "0e:ea:14:90:22:a6",
+                "radio": "ra1",
+                "event_type": "eapol_key",
+                "event_category": "wifi_eapol",
+                "internal_event_ts_float": 1000.001,
+            },
+            {
+                "line_number": 41,
+                "source_ip": "10.0.0.40",
+                "client_mac": "76:27:03:0e:78:15",
+                "ap_mac": "0e:ea:14:90:22:a6",
+                "radio": "ra1",
+                "event_type": "eapol_key",
+                "event_category": "wifi_eapol",
+                "internal_event_ts_float": 1000.010,
+            },
+        ]
+        payload = build_canonical_events(events, max_gap_ms=20)
+        self.assertEqual(len(payload["canonical_events"]), 1)
+        self.assertEqual(
+            payload["canonical_events"][0]["canonical_event_type"],
+            "wifi_eapol_handshake_sequence",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

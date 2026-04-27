@@ -79,6 +79,40 @@ EAP_PACKET_DETAILS_RE = re.compile(
     r"EAP Packet\s+PortSecure:\s*(?P<port_secure>\d+),\s*bClearFrame\s+(?P<clear_frame>\d+)",
     re.IGNORECASE,
 )
+STA_ASSOC_TRACKER_JSON_RE = re.compile(r"(\{.*\"message_type\"\s*:\s*\"STA_ASSOC_TRACKER\".*\})")
+REASSOC_REQ_RE = re.compile(
+    r"(?P<radio>rai?\d+):\s*\[recv\s+reassoc_req\]\.\s*TA:\[(?P<ta>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\],\s*RA:\[(?P<ra>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\]",
+    re.IGNORECASE,
+)
+EAPOL_PACKET_DETAILS_RE = re.compile(
+    r"rt28xx_send_packets\s+(?P<direction>Send|Recv)\s+EAPOL\s+of\s+length\s+(?P<length>\d+)(?:\s+from\s+(?P<source>[A-Za-z0-9_-]+))?",
+    re.IGNORECASE,
+)
+EAPOL_KEY_DETAILS_RE = re.compile(
+    r"(?P<radio>rai?\d+):\s*(?P<direction>Send|Recv)\s+EAPOL-Key\s+(?P<message>M[1-4]),\s*DA=(?P<da>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}),\s*SA=(?P<sa>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}),\s*len=(?P<length>\d+)",
+    re.IGNORECASE,
+)
+KEY_ACTION_STA_RE = re.compile(
+    r"(?:^|\s)\d+>\s*(?P<action>KeyAdd|KeyDel)\s+STA\((?P<sta>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\)",
+    re.IGNORECASE,
+)
+DELETE_STA_REASON_RE = re.compile(
+    r"Delete\s+STA\((?P<sta>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\)(?:,\s*reason:(?P<reason>0x[0-9A-Fa-f]+))?",
+    re.IGNORECASE,
+)
+CFG80211_AP_STA_DEL_RE = re.compile(
+    r"(?P<radio>rai?\d+):\s*\(CFG80211_ApStaDel\)\s*STA_DEL\s*\((?P<sta>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\)(?:\s*reason:(?P<reason>0x[0-9A-Fa-f]+))?",
+    re.IGNORECASE,
+)
+SEND_DEAUTH_RE = re.compile(
+    r"(?P<radio>rai?\d+):\[send\s+deauth\]\s*TA:\[(?P<ta>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\],\s*RA:\[(?P<ra>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\].*?reason:(?P<reason>\d+),\s*protection=(?P<protection>\d+)",
+    re.IGNORECASE,
+)
+RADIUS_ENTRY_DEL_RE = re.compile(
+    r"(?P<radio>rai?\d+):\s*\(CFG80211_ApStaDel\)\s*radius\s+entry\[\d+\]\s+DEL\s*\((?P<sta>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\)",
+    re.IGNORECASE,
+)
+DRIVER_MISSING_ENTRY_RE = re.compile(r"Can't find pEntry in (?P<context>[A-Za-z0-9_]+)", re.IGNORECASE)
 
 
 def parse_line(line: str) -> Optional[ParsedEvent]:
@@ -111,6 +145,17 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         process_name = additional_fields["process_name"]
     if "process" in additional_fields:
         process = additional_fields["process"]
+    if "event_type" in additional_fields:
+        event_type = additional_fields["event_type"]
+        event_category = classify_event_category(message, process_name, event_type)
+    if "ap_mac" in additional_fields:
+        ap_mac = additional_fields["ap_mac"]
+    if "mac" in additional_fields:
+        mac = additional_fields["mac"]
+    if "radio" in additional_fields:
+        radio = additional_fields["radio"]
+    else:
+        radio = extract_radio(message)
 
     return ParsedEvent(
         parse_status="parsed",
@@ -129,7 +174,7 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         mac=mac,
         client_mac=client_mac,
         ap_mac=ap_mac,
-        radio=extract_radio(message),
+        radio=radio,
         rssi=extract_rssi(message),
         internal_event_ts=internal_event_ts,
         internal_event_ts_float=internal_event_ts_float,
@@ -144,6 +189,19 @@ def parse_line(line: str) -> Optional[ParsedEvent]:
         bssid=additional_fields.get("bssid"),
         port_secure=additional_fields.get("port_secure"),
         clear_frame=additional_fields.get("clear_frame"),
+        dns_queries=additional_fields.get("dns_queries"),
+        dns_servers=additional_fields.get("dns_servers"),
+        assoc_status=additional_fields.get("assoc_status"),
+        tracker_message_type=additional_fields.get("tracker_message_type"),
+        eapol_direction=additional_fields.get("eapol_direction"),
+        eapol_length=additional_fields.get("eapol_length"),
+        eapol_source=additional_fields.get("eapol_source"),
+        eapol_message=additional_fields.get("eapol_message"),
+        da_mac=additional_fields.get("da_mac"),
+        sa_mac=additional_fields.get("sa_mac"),
+        reason=additional_fields.get("reason"),
+        protection=additional_fields.get("protection"),
+        driver_context=additional_fields.get("driver_context"),
     )
 
 
@@ -527,8 +585,31 @@ def build_internal_event_bucket(
 
 def extract_additional_event_fields(message: str, event_type: Optional[str]) -> dict[str, Any]:
     fields: dict[str, Any] = {}
+    tracker_payload = extract_sta_assoc_tracker_payload(message)
 
-    if event_type == "dns_timeout":
+    if tracker_payload and str(tracker_payload.get("event_type") or "").strip().lower() == "dns timeout":
+        queries, servers = extract_indexed_tracker_values(tracker_payload)
+        client_mac = to_lower_or_none(tracker_payload.get("mac"))
+        radio = to_lower_or_none(tracker_payload.get("vap"))
+        assoc_status = tracker_payload.get("assoc_status")
+        if assoc_status is not None:
+            assoc_status = str(assoc_status)
+        fields.update(
+            {
+                "event_type": "dns_timeout",
+                "client_mac": client_mac,
+                "mac": client_mac,
+                "radio": radio,
+                "process_name": "stahtd",
+                "event_category": "network_dns",
+                "dns_queries": queries,
+                "dns_servers": servers,
+                "assoc_status": assoc_status,
+                "tracker_message_type": tracker_payload.get("message_type"),
+            }
+        )
+
+    if event_type == "dns_timeout" and not tracker_payload:
         match = DNS_TIMEOUT_DETAILS_RE.search(message)
         if match:
             source_port = to_int_or_none(match.group("source_port"))
@@ -574,7 +655,150 @@ def extract_additional_event_fields(message: str, event_type: Optional[str]) -> 
                 }
             )
 
+    if event_type == "reassoc_request":
+        match = REASSOC_REQ_RE.search(message)
+        if match:
+            client_mac = match.group("ta").lower()
+            ap_mac = match.group("ra").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "ap_mac": ap_mac,
+                    "radio": match.group("radio").lower(),
+                }
+            )
+
+    if event_type == "eapol_packet":
+        match = EAPOL_PACKET_DETAILS_RE.search(message)
+        if match:
+            fields.update(
+                {
+                    "eapol_direction": match.group("direction").lower(),
+                    "eapol_length": to_int_or_none(match.group("length")),
+                    "eapol_source": match.group("source"),
+                }
+            )
+
+    if event_type == "eapol_key":
+        match = EAPOL_KEY_DETAILS_RE.search(message)
+        if match:
+            direction = match.group("direction").lower()
+            da_mac = match.group("da").lower()
+            sa_mac = match.group("sa").lower()
+            if direction == "send":
+                client_mac = da_mac
+                ap_mac = sa_mac
+            else:
+                client_mac = sa_mac
+                ap_mac = da_mac
+            fields.update(
+                {
+                    "radio": match.group("radio").lower(),
+                    "eapol_direction": direction,
+                    "eapol_message": match.group("message").upper(),
+                    "da_mac": da_mac,
+                    "sa_mac": sa_mac,
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "ap_mac": ap_mac,
+                    "eapol_length": to_int_or_none(match.group("length")),
+                }
+            )
+
+    if event_type in {"wifi_key_add", "wifi_key_delete"}:
+        match = KEY_ACTION_STA_RE.search(message)
+        if match:
+            client_mac = match.group("sta").lower()
+            fields.update({"client_mac": client_mac, "mac": client_mac})
+
+    if event_type == "station_delete":
+        match = DELETE_STA_REASON_RE.search(message)
+        if match:
+            client_mac = match.group("sta").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "reason": match.group("reason"),
+                }
+            )
+
+    if event_type == "cfg80211_station_delete":
+        match = CFG80211_AP_STA_DEL_RE.search(message)
+        if match:
+            client_mac = match.group("sta").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": match.group("radio").lower(),
+                    "reason": match.group("reason"),
+                }
+            )
+
+    if event_type == "deauth_sent":
+        match = SEND_DEAUTH_RE.search(message)
+        if match:
+            client_mac = match.group("ra").lower()
+            ap_mac = match.group("ta").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "ap_mac": ap_mac,
+                    "radio": match.group("radio").lower(),
+                    "reason": match.group("reason"),
+                    "protection": to_int_or_none(match.group("protection")),
+                }
+            )
+
+    if event_type == "radius_entry_delete":
+        match = RADIUS_ENTRY_DEL_RE.search(message)
+        if match:
+            client_mac = match.group("sta").lower()
+            fields.update(
+                {
+                    "client_mac": client_mac,
+                    "mac": client_mac,
+                    "radio": match.group("radio").lower(),
+                }
+            )
+
+    if event_type == "driver_missing_station_entry":
+        match = DRIVER_MISSING_ENTRY_RE.search(message)
+        if match:
+            fields["driver_context"] = match.group("context")
+
     return fields
+
+
+def extract_sta_assoc_tracker_payload(message: str) -> Optional[dict[str, Any]]:
+    match = STA_ASSOC_TRACKER_JSON_RE.search(message)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+
+
+def extract_indexed_tracker_values(payload: dict[str, Any]) -> tuple[list[str], list[str]]:
+    queries: list[tuple[int, str]] = []
+    servers: list[tuple[int, str]] = []
+    for key, value in payload.items():
+        if value is None:
+            continue
+        q_match = re.match(r"query_(\d+)$", key)
+        if q_match:
+            queries.append((int(q_match.group(1)), str(value)))
+            continue
+        s_match = re.match(r"query_server_(\d+)$", key)
+        if s_match:
+            servers.append((int(s_match.group(1)), str(value)))
+    queries.sort(key=lambda item: item[0])
+    servers.sort(key=lambda item: item[0])
+    return [value for _, value in queries], [value for _, value in servers]
 
 
 def to_int_or_none(value: Optional[str]) -> Optional[int]:
@@ -584,3 +808,9 @@ def to_int_or_none(value: Optional[str]) -> Optional[int]:
         return int(value)
     except ValueError:
         return None
+
+
+def to_lower_or_none(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return str(value).lower()
