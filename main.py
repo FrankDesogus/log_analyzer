@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from detection import run_detection_layer
 from src.parser import parse_file
 
 
@@ -14,6 +15,9 @@ if __name__ == "__main__":
     unknown_events_output_file = output_dir / "unknown_events.json"
     unknown_summary_output_file = output_dir / "unknown_summary.json"
     unknown_samples_output_file = output_dir / "unknown_samples.json"
+    enriched_canonical_output_file = output_dir / "enriched_canonical_events.json"
+    detection_summary_output_file = output_dir / "detection_summary.json"
+
     include_raw_in_canonical_output = False
     export_parsed_events = True
     export_all_unknown_events = True
@@ -35,3 +39,18 @@ if __name__ == "__main__":
         export_all_unknown_events=export_all_unknown_events,
         max_unknown_samples_per_pattern=max_unknown_samples_per_pattern,
     )
+
+    detection_summary = run_detection_layer(
+        canonical_input_path=canonical_output_file,
+        enriched_output_path=enriched_canonical_output_file,
+        summary_output_path=detection_summary_output_file,
+    )
+
+    print("\nDETECTION SUMMARY")
+    print(f"- enriched events: {detection_summary.get('total_enriched_events', 0)}")
+    print(f"- incident candidates: {detection_summary.get('incident_candidate_count', 0)}")
+    print(f"- severity distribution: {detection_summary.get('severity_distribution', {})}")
+
+    tags_distribution = detection_summary.get("detection_tags_distribution", {})
+    top_tags = list(tags_distribution.items())[:5] if isinstance(tags_distribution, dict) else []
+    print(f"- top detection tags: {top_tags}")
