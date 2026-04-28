@@ -62,6 +62,12 @@ class DetectionLayerTests(unittest.TestCase):
             self.assertEqual(summary["total_enriched_events"], 1)
             self.assertTrue(enriched_path.exists())
             self.assertTrue(summary_path.exists())
+            enriched_payload = json.loads(enriched_path.read_text(encoding="utf-8"))
+            enriched_event = enriched_payload["canonical_events"][0]
+            self.assertIn("disconnect_diagnostic_label", enriched_event)
+            self.assertIn("disconnect_noise_score", enriched_event)
+            self.assertIn("disconnect_flapping_score", enriched_event)
+            self.assertIn("disconnect_diagnostic_distribution", summary)
 
 
 if __name__ == "__main__":

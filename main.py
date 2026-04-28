@@ -54,3 +54,16 @@ if __name__ == "__main__":
     tags_distribution = detection_summary.get("detection_tags_distribution", {})
     top_tags = list(tags_distribution.items())[:5] if isinstance(tags_distribution, dict) else []
     print(f"- top detection tags: {top_tags}")
+
+    disconnect_distribution = detection_summary.get("disconnect_diagnostic_distribution", {})
+    ap_radio_specific_count = tags_distribution.get("ap_radio_specific_issue", 0) if isinstance(tags_distribution, dict) else 0
+    print("\nDISCONNECT DIAGNOSTICS")
+    print(f"- total wifi_disconnect_sequences: {detection_summary.get('event_type_risk_distribution', {}).get('wifi_disconnect_sequence', 0)}")
+    print(f"- suspicious wifi_disconnect_sequences: {sum(disconnect_distribution.values()) if isinstance(disconnect_distribution, dict) else 0}")
+    print(f"- probable duplicate noise: {detection_summary.get('probable_unifi_duplicate_noise_count', 0)}")
+    print(f"- client flapping: {detection_summary.get('client_flapping_count', 0)}")
+    print(f"- ap/radio specific: {ap_radio_specific_count}")
+    print(
+        f"- needs manual review: "
+        f"{disconnect_distribution.get('needs_manual_review', 0) if isinstance(disconnect_distribution, dict) else 0}"
+    )

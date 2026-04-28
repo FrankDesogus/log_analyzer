@@ -33,6 +33,22 @@ def build_detection_summary(enriched_events: list[dict[str, Any]]) -> dict[str, 
         if isinstance(tags, list):
             tag_distribution.update(str(tag) for tag in tags if tag)
 
+    disconnect_events = [
+        event for event in enriched_events if (event.get("canonical_event_type") or "") == "wifi_disconnect_sequence"
+    ]
+    disconnect_label_distribution = Counter(
+        str(event.get("disconnect_diagnostic_label") or "needs_manual_review")
+        for event in disconnect_events
+    )
+    disconnect_only_sequence_count = sum(
+        1
+        for event in disconnect_events
+        if "disconnect_only_sequence" in set(event.get("detection_tags") or [])
+    )
+    top_disconnect_clients = _aggregate_top_entities(disconnect_events, field="client_mac")
+    top_disconnect_source_ips = _aggregate_top_entities(disconnect_events, field="source_ip")
+    top_disconnect_radios = _aggregate_top_entities(disconnect_events, field="radio")
+
     return {
         "total_enriched_events": len(enriched_events),
         "severity_distribution": dict(sorted(severity_distribution.items())),
@@ -53,6 +69,13 @@ def build_detection_summary(enriched_events: list[dict[str, Any]]) -> dict[str, 
         "top_source_ips_by_severity": top_source_ips,
         "event_type_risk_distribution": dict(sorted(event_type_risk_distribution.items())),
         "detection_tags_distribution": dict(tag_distribution.most_common()),
+        "disconnect_diagnostic_distribution": dict(disconnect_label_distribution),
+        "disconnect_only_sequence_count": disconnect_only_sequence_count,
+        "probable_unifi_duplicate_noise_count": int(disconnect_label_distribution.get("probable_unifi_duplicate_noise", 0)),
+        "client_flapping_count": int(disconnect_label_distribution.get("client_flapping", 0)),
+        "top_disconnect_clients": top_disconnect_clients,
+        "top_disconnect_source_ips": top_disconnect_source_ips,
+        "top_disconnect_radios": top_disconnect_radios,
     }
 
 
