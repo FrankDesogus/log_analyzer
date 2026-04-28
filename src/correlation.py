@@ -12,6 +12,9 @@ DEFAULT_MAX_ASSOC_FAILURE_ATTACH_GAP_SECONDS = 0.75
 DEFAULT_MAX_ASSOC_FAILURE_ATTACH_LINE_GAP = 30
 DEFAULT_MAX_WIFI_DISCONNECT_TIMESTAMP_GAP_SECONDS = 1.0
 DEFAULT_MAX_WIFI_DISCONNECT_SEQUENCE_SPAN_SECONDS = 12.0
+DEFAULT_MAX_WIFI_DISCONNECT_EVENTS_PER_SEQUENCE = 15
+DEFAULT_MAX_WIFI_DISCONNECT_TIGHT_SPAN_SECONDS = 3.0
+DEFAULT_WIFI_DISCONNECT_BURST_GAP_SECONDS = 0.15
 CORRELATION_STRATEGY = "source_ip+client_mac+radio_or_fallback+internal_event_ts_window"
 
 
@@ -24,6 +27,9 @@ class CorrelationConfig:
     max_assoc_failure_attach_line_gap: int = DEFAULT_MAX_ASSOC_FAILURE_ATTACH_LINE_GAP
     max_wifi_disconnect_timestamp_gap_seconds: float = DEFAULT_MAX_WIFI_DISCONNECT_TIMESTAMP_GAP_SECONDS
     max_wifi_disconnect_sequence_span_seconds: float = DEFAULT_MAX_WIFI_DISCONNECT_SEQUENCE_SPAN_SECONDS
+    max_wifi_disconnect_events_per_sequence: int = DEFAULT_MAX_WIFI_DISCONNECT_EVENTS_PER_SEQUENCE
+    max_wifi_disconnect_tight_span_seconds: float = DEFAULT_MAX_WIFI_DISCONNECT_TIGHT_SPAN_SECONDS
+    wifi_disconnect_burst_gap_seconds: float = DEFAULT_WIFI_DISCONNECT_BURST_GAP_SECONDS
 
 
 @dataclass
@@ -161,6 +167,18 @@ def _can_attach_to_cluster(cluster: _ClusterState, event: dict[str, Any], config
             return False
         if cluster.first_sort_ts is not None:
             disconnect_span_seconds = abs(event_ts - cluster.first_sort_ts)
+            # Manteniamo uniti i micro-burst quasi simultanei, ma separiamo sequenze
+            # disconnect-only troppo estese nel tempo o nel numero di eventi.
+            if (
+                len(cluster.raw_indexes) >= config.max_wifi_disconnect_events_per_sequence
+                and gap_seconds > config.wifi_disconnect_burst_gap_seconds
+            ):
+                return False
+            if (
+                disconnect_span_seconds > config.max_wifi_disconnect_tight_span_seconds
+                and gap_seconds > config.wifi_disconnect_burst_gap_seconds
+            ):
+                return False
             if disconnect_span_seconds > config.max_wifi_disconnect_sequence_span_seconds:
                 return False
 

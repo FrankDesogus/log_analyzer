@@ -41,6 +41,8 @@ class UnknownOutputsTests(unittest.TestCase):
         self.assertEqual(report["max_consecutive_timestamp_gap_seconds"], 8.0)
         self.assertIn("wifi_unknown_sequence", report["suspicious_sequences_by_type"])
         self.assertGreaterEqual(len(report["suspicious_canonical_sequences_sample"]), 1)
+        self.assertIn("disconnect_sequence_quality", report)
+        self.assertEqual(report["disconnect_sequence_quality"]["total_wifi_disconnect_sequences"], 0)
 
     def test_unknown_outputs_are_generated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
