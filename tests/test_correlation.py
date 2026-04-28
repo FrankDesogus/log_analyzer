@@ -455,6 +455,31 @@ class CanonicalCorrelationTests(unittest.TestCase):
             )
         )
 
+    def test_disconnect_only_sequences_are_split_when_too_long(self) -> None:
+        events = []
+        for idx in range(20):
+            events.append(
+                {
+                    "line_number": 200 + idx,
+                    "source_ip": "10.0.0.70",
+                    "client_mac": "de:ad:be:ef:00:01",
+                    "radio": "ra1",
+                    "process_name": "hostapd",
+                    "event_type": "disconnect",
+                    "event_category": "wifi_disconnect",
+                    "internal_event_ts_float": 7000.0 + (idx * 0.2),
+                }
+            )
+
+        payload = build_canonical_events(events)
+        canonical_events = payload["canonical_events"]
+
+        self.assertGreater(len(canonical_events), 1)
+        self.assertTrue(
+            all(event["canonical_event_type"] == "wifi_disconnect_sequence" for event in canonical_events)
+        )
+        self.assertTrue(all(int(event["raw_event_count"]) <= 15 for event in canonical_events))
+
 
 if __name__ == "__main__":
     unittest.main()

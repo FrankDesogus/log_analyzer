@@ -694,6 +694,7 @@ def build_quality_report(
 
     canonical_unknown_stats = summarize_canonical_unknown_sequences(canonical_events)
     canonical_gap_stats = analyze_canonical_sequence_gaps(canonical_events, parsed_events)
+    disconnect_sequence_quality = analyze_disconnect_sequence_quality(canonical_events)
     wifi_security_sequences = [
         event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_security_sequence"
     ]
@@ -728,6 +729,7 @@ def build_quality_report(
         "max_consecutive_timestamp_gap_seconds": canonical_gap_stats["max_consecutive_timestamp_gap_seconds"],
         "suspicious_sequences_by_type": canonical_gap_stats["suspicious_sequences_by_type"],
         "suspicious_canonical_sequences_sample": canonical_gap_stats["suspicious_canonical_sequences_sample"],
+        "disconnect_sequence_quality": disconnect_sequence_quality,
     }
 
 
@@ -838,6 +840,50 @@ def analyze_canonical_sequence_gaps(
         "max_consecutive_timestamp_gap_seconds": round(max_ts_gap, 3),
         "suspicious_sequences_by_type": dict(suspicious_by_type),
         "suspicious_canonical_sequences_sample": suspicious_samples,
+    }
+
+
+def analyze_disconnect_sequence_quality(
+    canonical_events: list[dict[str, Any]],
+    suspicious_raw_event_count_threshold: int = 15,
+    sample_limit: int = 10,
+) -> dict[str, Any]:
+    disconnect_sequences = [
+        event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_disconnect_sequence"
+    ]
+    if not disconnect_sequences:
+        return {
+            "total_wifi_disconnect_sequences": 0,
+            "suspicious_wifi_disconnect_sequences": 0,
+            "max_disconnect_sequence_raw_event_count": 0,
+            "avg_disconnect_sequence_raw_event_count": 0.0,
+            "top_largest_disconnect_sequences_sample": [],
+        }
+
+    raw_counts = [int(event.get("raw_event_count") or 0) for event in disconnect_sequences]
+    suspicious_sequences = [count for count in raw_counts if count > suspicious_raw_event_count_threshold]
+    largest_sequences = sorted(
+        disconnect_sequences,
+        key=lambda event: int(event.get("raw_event_count") or 0),
+        reverse=True,
+    )[:sample_limit]
+
+    return {
+        "total_wifi_disconnect_sequences": len(disconnect_sequences),
+        "suspicious_wifi_disconnect_sequences": len(suspicious_sequences),
+        "max_disconnect_sequence_raw_event_count": max(raw_counts),
+        "avg_disconnect_sequence_raw_event_count": round(sum(raw_counts) / len(raw_counts), 3),
+        "top_largest_disconnect_sequences_sample": [
+            {
+                "canonical_event_id": event.get("canonical_event_id"),
+                "raw_event_count": int(event.get("raw_event_count") or 0),
+                "source_ip": event.get("source_ip"),
+                "client_mac": event.get("client_mac"),
+                "radio": event.get("radio"),
+                "event_types_seen": event.get("event_types_seen", []),
+            }
+            for event in largest_sequences
+        ],
     }
 
 
