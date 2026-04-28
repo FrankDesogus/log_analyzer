@@ -438,6 +438,7 @@ def parse_file(
     canonical_output_path: Optional[Path] = None,
     parser_report_output_path: Optional[Path] = None,
     quality_report_output_path: Optional[Path] = None,
+    disconnect_sequence_diagnostics_output_path: Optional[Path] = None,
     unknown_events_output_path: Optional[Path] = None,
     unknown_summary_output_path: Optional[Path] = None,
     unknown_samples_output_path: Optional[Path] = None,
@@ -525,6 +526,18 @@ def parse_file(
         with quality_report_output_path.open("w", encoding="utf-8") as file_out:
             json.dump(quality_report, file_out, indent=2, ensure_ascii=False)
         print(f"Quality report scritto in: {quality_report_output_path}")
+
+    if disconnect_sequence_diagnostics_output_path is not None:
+        disconnect_sequence_diagnostics = build_disconnect_sequence_diagnostics(
+            correlated_payload["canonical_events"],
+            parsed_events,
+        )
+        with disconnect_sequence_diagnostics_output_path.open("w", encoding="utf-8") as file_out:
+            json.dump(disconnect_sequence_diagnostics, file_out, indent=2, ensure_ascii=False)
+        print(
+            "Disconnect sequence diagnostics scritto in: "
+            f"{disconnect_sequence_diagnostics_output_path}"
+        )
 
     print("QUALITY CHECK")
     print(f"- raw events: {quality_report['total_raw_events']}")
@@ -885,6 +898,156 @@ def analyze_disconnect_sequence_quality(
             for event in largest_sequences
         ],
     }
+
+
+
+def build_disconnect_sequence_diagnostics(
+    canonical_events: list[dict[str, Any]],
+    parsed_events: list[dict[str, Any]],
+    suspicious_raw_event_count_threshold: int = 15,
+    top_entities_limit: int = 10,
+) -> dict[str, Any]:
+    disconnect_sequences = [
+        event for event in canonical_events if (event.get("canonical_event_type") or "") == "wifi_disconnect_sequence"
+    ]
+    suspicious_sequences = [
+        event
+        for event in disconnect_sequences
+        if int(event.get("raw_event_count") or 0) > suspicious_raw_event_count_threshold
+    ]
+
+    diagnostics = [_build_disconnect_sequence_entry(sequence, parsed_events) for sequence in suspicious_sequences]
+
+    label_counts = Counter(entry["diagnostic_label"] for entry in diagnostics)
+    raw_counts = [int(entry.get("raw_event_count") or 0) for entry in diagnostics]
+    top_client_macs = Counter((entry.get("client_mac") or "unknown") for entry in diagnostics).most_common(
+        top_entities_limit
+    )
+    top_source_ips = Counter((entry.get("source_ip") or "unknown") for entry in diagnostics).most_common(
+        top_entities_limit
+    )
+
+    return {
+        "total_wifi_disconnect_sequences": len(disconnect_sequences),
+        "suspicious_wifi_disconnect_sequences": len(diagnostics),
+        "diagnostic_label_counts": dict(label_counts),
+        "max_raw_event_count": max(raw_counts) if raw_counts else 0,
+        "avg_raw_event_count": round(sum(raw_counts) / len(raw_counts), 3) if raw_counts else 0.0,
+        "top_client_macs": [
+            {"client_mac": value, "sequence_count": count} for value, count in top_client_macs
+        ],
+        "top_source_ips": [
+            {"source_ip": value, "sequence_count": count} for value, count in top_source_ips
+        ],
+        "sequences": diagnostics,
+    }
+
+
+def _build_disconnect_sequence_entry(sequence: dict[str, Any], parsed_events: list[dict[str, Any]]) -> dict[str, Any]:
+    raw_line_numbers = [
+        int(value)
+        for value in sequence.get("raw_line_numbers", [])
+        if isinstance(value, int) or (isinstance(value, str) and value.isdigit())
+    ]
+    max_line_gap, max_consecutive_line_gap = _compute_line_gap_stats(raw_line_numbers)
+    timestamp_gap_seconds, max_consecutive_timestamp_gap_seconds, has_enough_ts_data = _compute_timestamp_gap_stats(
+        sequence, parsed_events
+    )
+
+    entry = {
+        "canonical_event_id": sequence.get("canonical_event_id"),
+        "source_ip": sequence.get("source_ip"),
+        "host": sequence.get("host"),
+        "client_mac": sequence.get("client_mac"),
+        "radio": sequence.get("radio"),
+        "normalized_timestamp": sequence.get("normalized_timestamp"),
+        "first_internal_event_ts": sequence.get("first_internal_event_ts"),
+        "last_internal_event_ts": sequence.get("last_internal_event_ts"),
+        "duration_ms": sequence.get("duration_ms"),
+        "raw_event_count": int(sequence.get("raw_event_count") or 0),
+        "raw_line_numbers": raw_line_numbers,
+        "event_types_seen": sequence.get("event_types_seen", []),
+        "process_names_seen": sequence.get("process_names_seen", []),
+        "sources_seen": sequence.get("sources_seen", []),
+        "sequence_summary": sequence.get("sequence_summary", {}),
+        "max_line_gap": max_line_gap,
+        "max_consecutive_line_gap": max_consecutive_line_gap,
+        "timestamp_gap_seconds": round(timestamp_gap_seconds, 3),
+        "max_consecutive_timestamp_gap_seconds": round(max_consecutive_timestamp_gap_seconds, 3),
+    }
+    entry["diagnostic_label"] = _classify_disconnect_sequence_diagnostic(entry, has_enough_ts_data=has_enough_ts_data)
+    return entry
+
+
+def _compute_line_gap_stats(raw_line_numbers: list[int]) -> tuple[int, int]:
+    if len(raw_line_numbers) <= 1:
+        return 0, 0
+
+    sorted_lines = sorted(raw_line_numbers)
+    consecutive_gaps = [
+        sorted_lines[index + 1] - sorted_lines[index]
+        for index in range(len(sorted_lines) - 1)
+    ]
+    if not consecutive_gaps:
+        return 0, 0
+
+    max_gap = max(consecutive_gaps)
+    return max_gap, max_gap
+
+
+def _compute_timestamp_gap_stats(
+    sequence: dict[str, Any], parsed_events: list[dict[str, Any]]
+) -> tuple[float, float, bool]:
+    raw_event_indexes = sequence.get("raw_event_indexes", [])
+    timestamps: list[float] = []
+    for raw_idx in raw_event_indexes:
+        if not isinstance(raw_idx, int) or raw_idx < 0 or raw_idx >= len(parsed_events):
+            continue
+        normalized_timestamp = parsed_events[raw_idx].get("normalized_timestamp")
+        epoch = _normalized_ts_to_epoch(normalized_timestamp)
+        if epoch is not None:
+            timestamps.append(epoch)
+
+    if len(timestamps) <= 1:
+        return 0.0, 0.0, False
+
+    sorted_ts = sorted(timestamps)
+    timestamp_gap_seconds = max(sorted_ts) - min(sorted_ts)
+    max_consecutive_timestamp_gap_seconds = max(
+        sorted_ts[index + 1] - sorted_ts[index]
+        for index in range(len(sorted_ts) - 1)
+    )
+    return timestamp_gap_seconds, max_consecutive_timestamp_gap_seconds, True
+
+
+def _classify_disconnect_sequence_diagnostic(
+    sequence_entry: dict[str, Any],
+    *,
+    has_enough_ts_data: bool,
+) -> str:
+    raw_event_count = int(sequence_entry.get("raw_event_count") or 0)
+    duration_ms = sequence_entry.get("duration_ms")
+    timestamp_gap_seconds = float(sequence_entry.get("timestamp_gap_seconds") or 0.0)
+    max_consecutive_timestamp_gap_seconds = float(
+        sequence_entry.get("max_consecutive_timestamp_gap_seconds") or 0.0
+    )
+
+    if not has_enough_ts_data:
+        return "needs_manual_review"
+
+    has_tight_time_profile = (
+        max_consecutive_timestamp_gap_seconds <= 1.0
+        and timestamp_gap_seconds <= 3.0
+        and isinstance(duration_ms, int)
+        and duration_ms <= 3000
+    )
+    if raw_event_count >= 16 and has_tight_time_profile:
+        return "likely_duplicate_disconnect_burst"
+
+    if raw_event_count >= 16 and (timestamp_gap_seconds > 3.0 or max_consecutive_timestamp_gap_seconds > 1.0):
+        return "possibly_over_grouped_disconnects"
+
+    return "needs_manual_review"
 
 
 def is_unknown_event_type(event_type: Any) -> bool:
