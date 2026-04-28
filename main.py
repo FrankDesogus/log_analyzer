@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from detection import run_detection_layer
+from detection import run_detection_layer, run_incident_builder
 from src.parser import parse_file
 
 
@@ -17,6 +17,8 @@ if __name__ == "__main__":
     unknown_samples_output_file = output_dir / "unknown_samples.json"
     enriched_canonical_output_file = output_dir / "enriched_canonical_events.json"
     detection_summary_output_file = output_dir / "detection_summary.json"
+    incidents_output_file = output_dir / "incidents.json"
+    incident_summary_output_file = output_dir / "incident_summary.json"
 
     include_raw_in_canonical_output = False
     export_parsed_events = True
@@ -67,3 +69,16 @@ if __name__ == "__main__":
         f"- needs manual review: "
         f"{disconnect_distribution.get('needs_manual_review', 0) if isinstance(disconnect_distribution, dict) else 0}"
     )
+
+    incident_summary = run_incident_builder(
+        enriched_input_path=enriched_canonical_output_file,
+        incidents_output_path=incidents_output_file,
+        summary_output_path=incident_summary_output_file,
+    )
+
+    print("\nINCIDENT SUMMARY")
+    print(f"- total incidents: {incident_summary.get('total_incidents', 0)}")
+    print(f"- severity distribution: {incident_summary.get('severity_distribution', {})}")
+    print(f"- incident type distribution: {incident_summary.get('incident_type_distribution', {})}")
+    print(f"- top clients: {incident_summary.get('top_clients', [])[:5]}")
+    print(f"- top source IPs: {incident_summary.get('top_source_ips', [])[:5]}")
