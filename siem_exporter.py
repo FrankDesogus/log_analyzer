@@ -259,7 +259,7 @@ def export_opensearch(output_dir: Path) -> dict[str, Any]:
             "total_canonical_events": quality_report.get("total_canonical_events"),
             "unknown_events": quality_report.get("unknown_event_count_total", quality_report.get("unknown_events")),
             "total_enriched_events": len(enriched),
-            "incident_candidates": detection_summary.get("incident_candidates", incident_summary.get("incident_candidate_count")),
+            "incident_candidates": detection_summary.get("incident_candidate_count", incident_summary.get("incident_candidate_count")),
             "final_incidents": len(incidents),
             "analyst_priority_distribution": incident_summary.get("analyst_priority_distribution"),
         },
