@@ -20,9 +20,13 @@ Metriche operative correnti (baseline condivisa):
 - `enriched_canonical_events.json` deve restare completo (no filtering/no data loss).
 
 ## Incident builder aggiornato
-È stato introdotto un ranking separato chiamato `operational_impact_score` per migliorare la prioritizzazione SOC senza alterare:
+È stato introdotto un doppio score per migliorare la prioritizzazione SOC senza alterare:
 - `severity_score` originale
 - `analyst_priority` originale
+
+Distinzione tecnica:
+- `operational_impact_score`: score normalizzato/capped (cap 120), leggibile per dashboard/bucket.
+- `operational_impact_rank_score`: score di ordinamento reale (non capped a 120), usato solo per ranking operativo.
 
 ### Operational impact model (conservativo)
 Formula leggibile e commentata nel codice:
@@ -39,17 +43,41 @@ Formula leggibile e commentata nel codice:
   - `incident_candidate`
 - cap massimo: 120
 
-Uso del nuovo score:
+Formula `operational_impact_rank_score` (deterministica e spiegabile):
+- base: `severity_score`
+- peso analyst priority: `P1=+50`, `P2=+25`, `P3=+10`, `noise=0`
+- peso volume: `min(canonical_event_count / 10, 100)`
+- peso durata: `min(duration_seconds / 60, 20)`
+- peso ampiezza:
+  - `source_ips_count * 5`
+  - `radios_count * 5`
+  - `ap_macs_count * 3`
+- peso tag critici:
+  - `high_event_volume=+15`
+  - `repeated_disconnect=+15`
+  - `poor_rssi=+10`
+  - `wifi_security=+10`
+  - `incident_candidate=+10`
+
+Uso del rank score:
 - ordinamento `top_true_incidents`
 - ordinamento `top_problematic_clients`
 - ordinamento `true_incidents_to_review` in `analyst_summary.json`
+- ordinamento `what_to_investigate_first`
+
+Tie-break operativo adottato:
+1. `operational_impact_rank_score` DESC
+2. `operational_impact_score` DESC
+3. `severity_score` DESC
+4. `canonical_event_count` DESC
+5. `first_seen` ASC
 
 ## Analyst summary / Incident summary
 I report analyst/SIEM restano viste operative, non trasformazioni distruttive dei dati.
 
 ### `analyst_summary.json`
-- Incidenti reali ordinati per `operational_impact_score` decrescente.
-- Ogni true incident include `operational_impact_score`.
+- Incidenti reali ordinati per `operational_impact_rank_score` (con tie-break espliciti).
+- Ogni true incident include `operational_impact_score` e `operational_impact_rank_score`.
 - Sezione nuova: `what_to_investigate_first` con:
   - client prioritario
   - motivazione
@@ -58,12 +86,13 @@ I report analyst/SIEM restano viste operative, non trasformazioni distruttive de
   - controlli operativi consigliati
 
 ### `incident_summary.json`
-- `top_true_incidents` ordinati per `operational_impact_score`.
+- `top_true_incidents` ordinati per `operational_impact_rank_score`.
 - `top_problematic_clients` ordinati per impatto operativo reale.
 - Campi aggiunti:
   - `total_suppressed_or_low_priority_events`
   - `noise_or_suppressed_breakdown`
   - `summary_note` (esplicita no data loss e natura analyst/SIEM view)
+  - `operational_impact_rank_score` nei blocchi top incident/client
 
 ## Strategia suppression
 La suppression è ammessa solo nel layer incident/reporting:
@@ -89,6 +118,16 @@ I due client P1 principali da mantenere in focus operativo:
 - Detection layer
 - `enriched_canonical_events.json`
 - Conteggi core (raw/parsed/canonical/enriched/unknown)
+
+## File coinvolti in questa modifica
+- `detection/incident_builder.py` (nuovo rank score, ordinamenti, campi output, ranking_factors)
+- `PROJECT_CONTEXT_UPDATED.md` (documentazione tecnica aggiornata)
+
+Core non toccato:
+- parser invariato
+- canonicalizer invariato
+- detection/enrichment invariati
+- nessun filtro/rimozione su `enriched_canonical_events.json`
 
 ## Prossimo step consigliato
 Preparare export OpenSearch/SIEM (NDJSON) con schema campi stabile:
