@@ -261,7 +261,7 @@ def _finalize_incident(incident: dict[str, Any], sequence_number: int) -> dict[s
     last_seen_seconds = to_float(incident.get("last_seen_seconds"), first_seen_seconds)
     duration_seconds = round(max(0.0, (last_seen_seconds or 0.0) - (first_seen_seconds or 0.0)), 3)
 
-    analyst_priority = _analyst_priority(incident_type, final_score, event_count, source_ips, radios, ap_macs, detection_tags)
+    analyst_priority = _analyst_priority(incident_type, final_score, event_count, source_ips, radios, ap_macs, detection_tags, confidence_score, severity_level)
     why_it_matters = _why_it_matters(incident_type, analyst_priority, event_count)
     recommended_action = _recommended_action(incident_type)
     evidence_summary = (
@@ -322,9 +322,10 @@ def build_incident_summary(incidents: list[dict[str, Any]], incident_metrics: di
     top_by_severity = sorted(
         incidents,
         key=lambda item: (
+            _priority_rank(str(item.get("analyst_priority") or "P3")),
             int(item.get("severity_score") or 0),
-            float(item.get("confidence_score") or 0.0),
             int(item.get("canonical_event_count") or 0),
+            float(item.get("confidence_score") or 0.0),
         ),
         reverse=True,
     )[:10]
@@ -338,7 +339,7 @@ def build_incident_summary(incidents: list[dict[str, Any]], incident_metrics: di
 
     priority_distribution = Counter(str(item.get("analyst_priority") or "P3") for item in incidents)
     true_incidents = [item for item in incidents if item.get("analyst_priority") != "noise"]
-    top_problematic_clients = _top_entity_from_incidents(true_incidents, "client_mac", "client_mac")
+    top_problematic_clients = _build_problematic_clients(true_incidents)
     top_involved_source_ips = _top_nested_entity(true_incidents, "source_ips", "source_ip")
     top_involved_radios = _top_nested_entity(true_incidents, "radios", "radio")
     top_involved_ap_macs = _top_nested_entity(true_incidents, "ap_macs", "ap_mac")
@@ -379,7 +380,8 @@ def build_incident_summary(incidents: list[dict[str, Any]], incident_metrics: di
                 "severity_score": item.get("severity_score"),
                 "canonical_event_count": item.get("canonical_event_count"),
             }
-            for item in sorted(true_incidents, key=lambda i: (int(i.get("severity_score") or 0), int(i.get("canonical_event_count") or 0)), reverse=True)[:10]
+            for item in top_by_severity
+            if item.get("analyst_priority") != "noise"
         ],
         "top_problematic_clients": top_problematic_clients,
         "top_involved_source_ips": top_involved_source_ips,
@@ -389,19 +391,55 @@ def build_incident_summary(incidents: list[dict[str, Any]], incident_metrics: di
     }
 
 
-def _analyst_priority(incident_type: str, final_score: int, event_count: int, source_ips: list[str], radios: list[str], ap_macs: list[str], detection_tags: list[str]) -> str:
+def _priority_rank(priority: str) -> int:
+    return {"noise": 0, "P3": 1, "P2": 2, "P1": 3}.get(priority, 1)
+
+
+def _analyst_priority(
+    incident_type: str,
+    final_score: int,
+    event_count: int,
+    source_ips: list[str],
+    radios: list[str],
+    ap_macs: list[str],
+    detection_tags: list[str],
+    confidence_score: float,
+    severity_level: str,
+) -> str:
     tags = set(detection_tags)
+    multi_scope = sum([len(source_ips) > 1, len(radios) > 1, len(ap_macs) > 1])
+
     if incident_type == "wifi_noise":
         return "noise"
-    if incident_type == "wifi_security" or final_score >= 80:
+
+    if severity_level == "critical" or final_score >= 85:
         return "P1"
-    if event_count >= 5 and (len(source_ips) > 1 or len(radios) > 1 or len(ap_macs) > 1):
-        return "P1"
-    if {"poor_rssi", "repeated_disconnect"}.intersection(tags) and event_count >= 3:
-        return "P1"
-    if event_count >= 3 or final_score >= 60:
+
+    if incident_type == "wifi_security":
+        if final_score >= 85 and confidence_score >= 0.8:
+            return "P1"
+        if event_count >= 3 or final_score >= 65 or confidence_score >= 0.7:
+            return "P2"
+        return "P3"
+
+    if incident_type == "wifi_instability":
+        if event_count >= 6 or (event_count >= 4 and multi_scope >= 2):
+            return "P1"
+        if final_score >= 70 or event_count >= 3 or multi_scope >= 1:
+            return "P2"
+        return "P3"
+
+    if {"poor_rssi", "repeated_disconnect", "high_event_volume"}.intersection(tags):
+        if final_score >= 80 and event_count >= 4:
+            return "P1"
+        if final_score >= 60 or event_count >= 3:
+            return "P2"
+
+    if event_count >= 4 and multi_scope >= 1:
         return "P2"
-    return "P3"
+    if final_score >= 60 or event_count >= 2:
+        return "P3"
+    return "noise"
 
 
 def _why_it_matters(incident_type: str, analyst_priority: str, event_count: int) -> str:
@@ -440,29 +478,57 @@ def _top_nested_entity(incidents: list[dict[str, Any]], field: str, output_field
 def build_analyst_summary(incidents: list[dict[str, Any]], incident_metrics: dict[str, Any]) -> dict[str, Any]:
     true_incidents = [item for item in incidents if item.get("analyst_priority") in {"P1", "P2", "P3"}]
     security_findings = [item for item in true_incidents if item.get("incident_type") == "wifi_security"]
+    compact_incidents = []
+    for item in true_incidents[:20]:
+        compact_incidents.append(
+            {
+                "incident_id": item.get("incident_id"),
+                "incident_type": item.get("incident_type"),
+                "severity_score": item.get("severity_score"),
+                "severity_level": item.get("severity_level"),
+                "analyst_priority": item.get("analyst_priority"),
+                "confidence_score": item.get("confidence_score"),
+                "client_mac": item.get("client_mac"),
+                "first_seen": item.get("first_seen"),
+                "last_seen": item.get("last_seen"),
+                "duration_seconds": item.get("duration_seconds"),
+                "source_ips": item.get("source_ips", []),
+                "radios": item.get("radios", []),
+                "ap_macs": item.get("ap_macs", []),
+                "canonical_event_count": item.get("canonical_event_count"),
+                "sample_canonical_event_ids": item.get("canonical_event_ids", [])[:10],
+                "detection_tags": item.get("detection_tags", [])[:5],
+                "why_it_matters": item.get("why_it_matters"),
+                "evidence_summary": item.get("evidence_summary"),
+                "recommended_action": item.get("recommended_action"),
+            }
+        )
+
     return {
-        "executive_summary": f"{len(true_incidents)} incidenti reali da revisionare; rumore/soppressioni contabilizzati separatamente.",
-        "true_incidents_to_review": true_incidents[:20],
-        "problematic_clients": _top_entity_from_incidents(true_incidents, "client_mac", "client_mac"),
+        "executive_summary": f"{len(true_incidents)} incidenti reali da revisionare; rumore/soppressioni classificati ma non rimossi dai dati enriched.",
+        "true_incidents_to_review": compact_incidents,
+        "problematic_clients": _build_problematic_clients(true_incidents),
         "involved_source_ips": _top_nested_entity(true_incidents, "source_ips", "source_ip"),
         "involved_radios": _top_nested_entity(true_incidents, "radios", "radio"),
         "involved_ap_macs": _top_nested_entity(true_incidents, "ap_macs", "ap_mac"),
         "unifi_noise_summary": {
             "noise_unifi_events": incident_metrics.get("noise_unifi", 0),
             "noise_unifi_incidents": incident_metrics.get("noise_unifi_incidents", 0),
+            "details": "Eventi classificati come rumore UniFi/duplicati hostapd-wevent, mantenuti in enriched_canonical_events.json per audit/forensics.",
         },
         "suppressed_events_summary": {
             "suppressed_single_events": incident_metrics.get("suppressed_single_events", 0),
             "low_priority_patterns": incident_metrics.get("low_priority_patterns", 0),
+            "details": "Soppressione applicata solo nel reporting incident; nessun canonical event rimosso dai dataset sorgente o da OpenSearch.",
         },
         "recommended_operational_checks": [
             "Verificare client con flapping persistente su più radio/AP.",
             "Controllare AP/radio con disconnessioni ripetute e poor RSSI.",
-            "Revisionare eventi wifi_security come priorità alta.",
+            "Revisionare wifi_security medium/high in base a confidenza e volume eventi, non solo per presenza del tag.",
         ],
         "siem_readiness_notes": [
             "Nessun evento enriched rimosso: la soppressione è solo nel layer incident/reporting.",
-            "Eventi soppressi mantenuti in contatori dedicati per audit e tuning.",
+            "Eventi soppressi e noise restano disponibili per analisi forense e pipeline OpenSearch.",
         ],
         "quality_guardrails": {
             "security_findings": len(security_findings),
@@ -470,3 +536,70 @@ def build_analyst_summary(incidents: list[dict[str, Any]], incident_metrics: dic
             "suppression_metrics": incident_metrics,
         },
     }
+
+
+def _build_problematic_clients(incidents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets: dict[str, dict[str, Any]] = {}
+    for item in incidents:
+        client = str(item.get("client_mac") or "unknown")
+        bucket = buckets.setdefault(client, {
+            "client_mac": client,
+            "incident_count": 0,
+            "total_canonical_event_count": 0,
+            "max_severity_score": 0,
+            "max_severity_level": "info",
+            "highest_analyst_priority": "P3",
+            "incident_types": set(),
+            "source_ips": set(),
+            "radios": set(),
+            "ap_macs": set(),
+            "key_detection_tags": Counter(),
+            "_signals": set(),
+        })
+        bucket["incident_count"] += 1
+        sev = int(item.get("severity_score") or 0)
+        if sev > bucket["max_severity_score"]:
+            bucket["max_severity_score"] = sev
+            bucket["max_severity_level"] = str(item.get("severity_level") or "info")
+        if _priority_rank(str(item.get("analyst_priority") or "P3")) > _priority_rank(bucket["highest_analyst_priority"]):
+            bucket["highest_analyst_priority"] = str(item.get("analyst_priority") or "P3")
+        bucket["total_canonical_event_count"] += int(item.get("canonical_event_count") or 0)
+        bucket["incident_types"].add(str(item.get("incident_type") or "informational"))
+        bucket["source_ips"].update(str(x) for x in item.get("source_ips", []) if x)
+        bucket["radios"].update(str(x) for x in item.get("radios", []) if x)
+        bucket["ap_macs"].update(str(x) for x in item.get("ap_macs", []) if x)
+        tags = [str(t) for t in item.get("detection_tags", []) if t]
+        bucket["key_detection_tags"].update(tags)
+        for marker in ("poor_rssi", "repeated_disconnect", "high_event_volume", "wifi_security"):
+            if marker in tags:
+                bucket["_signals"].add(marker)
+
+    output = []
+    for bucket in buckets.values():
+        output.append({
+            "client_mac": bucket["client_mac"],
+            "incident_count": bucket["incident_count"],
+            "total_canonical_event_count": bucket["total_canonical_event_count"],
+            "max_severity_score": bucket["max_severity_score"],
+            "max_severity_level": bucket["max_severity_level"],
+            "highest_analyst_priority": bucket["highest_analyst_priority"],
+            "incident_types": sorted(bucket["incident_types"]),
+            "source_ips": sorted(bucket["source_ips"]),
+            "radios": sorted(bucket["radios"]),
+            "ap_macs": sorted(bucket["ap_macs"]),
+            "key_detection_tags": [tag for tag, _ in bucket["key_detection_tags"].most_common(6)],
+            "recommended_action": "Prioritizzare troubleshooting RF/security sul client e correlare AP/radio coinvolti.",
+            "_signal_count": len(bucket["_signals"]),
+        })
+    output.sort(key=lambda x: (
+        _priority_rank(x["highest_analyst_priority"]),
+        x["max_severity_score"],
+        x["total_canonical_event_count"],
+        len(x["source_ips"]),
+        len(x["radios"]),
+        len(x["ap_macs"]),
+        x["_signal_count"],
+    ), reverse=True)
+    for item in output:
+        item.pop("_signal_count", None)
+    return output[:10]
