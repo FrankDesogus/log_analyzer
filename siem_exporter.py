@@ -24,6 +24,16 @@ def _ensure_list(value: Any) -> list[Any]:
     return [value]
 
 
+def _extract_docs(payload: Any, key: str) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [d for d in value if isinstance(d, dict)]
+    if isinstance(payload, list):
+        return [d for d in payload if isinstance(d, dict)]
+    return []
+
+
 def _write_bulk(path: Path, index_name: str, docs: list[dict[str, Any]], id_field: str, fallback_id_prefix: str) -> int:
     lines: list[str] = []
     for i, doc in enumerate(docs, start=1):
@@ -35,6 +45,22 @@ def _write_bulk(path: Path, index_name: str, docs: list[dict[str, Any]], id_fiel
     payload = "\n".join(lines) + "\n"
     path.write_text(payload, encoding="utf-8")
     return len(docs)
+
+
+def _validate_ndjson(path: Path, expected_lines: int) -> None:
+    content = path.read_text(encoding="utf-8")
+    if not content.endswith("\n"):
+        raise ValueError(f"{path.name} must terminate with newline")
+
+    lines = content.splitlines()
+    if len(lines) != expected_lines:
+        raise ValueError(f"{path.name} expected {expected_lines} lines, got {len(lines)}")
+
+    for line_no, line in enumerate(lines, start=1):
+        try:
+            json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path.name} line {line_no} is not valid JSON") from exc
 
 
 def _siemize_canonical(doc: dict[str, Any]) -> dict[str, Any]:
@@ -178,13 +204,15 @@ def export_opensearch(output_dir: Path) -> dict[str, Any]:
         "enriched_canonical_events": output_dir / "enriched_canonical_events.json",
         "incidents": output_dir / "incidents.json",
         "incident_summary": output_dir / "incident_summary.json",
+        "detection_summary": output_dir / "detection_summary.json",
         "analyst_summary": output_dir / "analyst_summary.json",
         "quality_report": output_dir / "quality_report.json",
     }
 
-    enriched = _ensure_list(_load_json(source_files["enriched_canonical_events"]))
-    incidents = _ensure_list(_load_json(source_files["incidents"]))
+    enriched = _extract_docs(_load_json(source_files["enriched_canonical_events"]), "canonical_events")
+    incidents = _extract_docs(_load_json(source_files["incidents"]), "incidents")
     incident_summary = _load_json(source_files["incident_summary"])
+    detection_summary = _load_json(source_files["detection_summary"]) if source_files["detection_summary"].exists() else {}
     analyst_summary = _load_json(source_files["analyst_summary"])
     quality_report = _load_json(source_files["quality_report"])
 
@@ -204,6 +232,9 @@ def export_opensearch(output_dir: Path) -> dict[str, Any]:
     canonical_count = _write_bulk(canonical_bulk, "unifi-canonical-events", canonical_docs, "canonical_event_id", "canonical")
     incident_count = _write_bulk(incidents_bulk, "unifi-incidents", incident_docs, "incident_id", "incident")
     analyst_count = _write_bulk(analyst_bulk, "unifi-analyst-summary", analyst_docs, "summary_id", "summary")
+    _validate_ndjson(canonical_bulk, canonical_count * 2)
+    _validate_ndjson(incidents_bulk, incident_count * 2)
+    _validate_ndjson(analyst_bulk, analyst_count * 2)
 
     template_file.write_text(json.dumps(_templates(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -228,7 +259,7 @@ def export_opensearch(output_dir: Path) -> dict[str, Any]:
             "total_canonical_events": quality_report.get("total_canonical_events"),
             "unknown_events": quality_report.get("unknown_event_count_total", quality_report.get("unknown_events")),
             "total_enriched_events": len(enriched),
-            "incident_candidates": incident_summary.get("incident_candidate_count"),
+            "incident_candidates": detection_summary.get("incident_candidates", incident_summary.get("incident_candidate_count")),
             "final_incidents": len(incidents),
             "analyst_priority_distribution": incident_summary.get("analyst_priority_distribution"),
         },
