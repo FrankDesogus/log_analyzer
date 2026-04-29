@@ -2,6 +2,7 @@ from pathlib import Path
 
 from detection import run_detection_layer, run_incident_builder
 from src.parser import parse_file
+from siem_exporter import export_opensearch
 
 
 if __name__ == "__main__":
@@ -83,4 +84,14 @@ if __name__ == "__main__":
     print(f"- severity distribution: {incident_summary.get('severity_distribution', {})}")
     print(f"- incident type distribution: {incident_summary.get('incident_type_distribution', {})}")
     print(f"- top clients: {incident_summary.get('top_clients', [])[:5]}")
+
     print(f"- top source IPs: {incident_summary.get('top_source_ips', [])[:5]}")
+
+    export_summary = export_opensearch(output_dir=output_dir)
+
+    print("\nOPENSEARCH EXPORT")
+    print(f"- canonical docs exported: {export_summary.get('canonical_docs_exported', 0)}")
+    print(f"- incident docs exported: {export_summary.get('incident_docs_exported', 0)}")
+    print(f"- analyst summary docs exported: {export_summary.get('analyst_summary_docs_exported', 0)}")
+    print(f"- output directory: {export_summary.get('output_directory', '')}")
+    print(f"- manifest: {export_summary.get('manifest', '')}")
