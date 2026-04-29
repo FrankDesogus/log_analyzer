@@ -65,7 +65,7 @@ class IncidentBuilderTests(unittest.TestCase):
             },
         ]
 
-        incidents = build_incidents(enriched_events, window_seconds=60.0)
+        incidents, metrics = build_incidents(enriched_events, window_seconds=60.0)
         self.assertEqual(len(incidents), 2)
         first = max(incidents, key=lambda item: item["canonical_event_count"])
         self.assertEqual(first["canonical_event_count"], 2)
@@ -105,11 +105,12 @@ class IncidentBuilderTests(unittest.TestCase):
             },
         ]
 
-        incidents = build_incidents(enriched_events, window_seconds=60.0)
-        by_type = {item["incident_type"]: item for item in incidents}
-        self.assertIn("wifi_noise", by_type)
-        self.assertIn("client_flapping", by_type)
-        self.assertLess(by_type["wifi_noise"]["severity_score"], 85)
+        incidents, metrics = build_incidents(enriched_events, window_seconds=60.0)
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["incident_type"], "wifi_noise")
+        self.assertEqual(incidents[0]["analyst_priority"], "noise")
+        self.assertGreater(metrics.get("noise_unifi_incidents", 0), 0)
+        self.assertGreater(metrics.get("suppressed_single_events", 0), 0)
 
     def test_run_incident_builder_writes_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -117,6 +118,7 @@ class IncidentBuilderTests(unittest.TestCase):
             enriched_path = base / "enriched.json"
             incidents_path = base / "incidents.json"
             summary_path = base / "incident_summary.json"
+            analyst_summary_path = base / "analyst_summary.json"
 
             payload = {
                 "canonical_events": [
@@ -138,10 +140,11 @@ class IncidentBuilderTests(unittest.TestCase):
             }
             enriched_path.write_text(json.dumps(payload), encoding="utf-8")
 
-            summary = run_incident_builder(enriched_path, incidents_path, summary_path)
+            summary = run_incident_builder(enriched_path, incidents_path, summary_path, analyst_summary_path)
             self.assertEqual(summary["total_incidents"], 1)
             self.assertTrue(incidents_path.exists())
             self.assertTrue(summary_path.exists())
+            self.assertTrue(analyst_summary_path.exists())
 
 
 if __name__ == "__main__":
