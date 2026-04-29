@@ -19,6 +19,7 @@ if __name__ == "__main__":
     detection_summary_output_file = output_dir / "detection_summary.json"
     incidents_output_file = output_dir / "incidents.json"
     incident_summary_output_file = output_dir / "incident_summary.json"
+    analyst_summary_output_file = output_dir / "analyst_summary.json"
 
     include_raw_in_canonical_output = False
     export_parsed_events = True
@@ -74,6 +75,7 @@ if __name__ == "__main__":
         enriched_input_path=enriched_canonical_output_file,
         incidents_output_path=incidents_output_file,
         summary_output_path=incident_summary_output_file,
+        analyst_summary_output_path=analyst_summary_output_file,
     )
 
     print("\nINCIDENT SUMMARY")

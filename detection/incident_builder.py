@@ -7,13 +7,14 @@ from typing import Any
 
 from detection.severity import clamp_score, level_from_score, to_float, to_int
 
-INCIDENT_GROUP_WINDOW_SECONDS = 60.0
+INCIDENT_GROUP_WINDOW_SECONDS = 300.0
 
 
 def run_incident_builder(
     enriched_input_path: Path,
     incidents_output_path: Path,
     summary_output_path: Path,
+    analyst_summary_output_path: Path | None = None,
     window_seconds: float = INCIDENT_GROUP_WINDOW_SECONDS,
 ) -> dict[str, Any]:
     if not enriched_input_path.exists():
@@ -29,21 +30,28 @@ def run_incident_builder(
             f"Formato enriched events non valido in {enriched_input_path}: campo 'canonical_events' mancante o non-lista."
         )
 
-    incidents = build_incidents(enriched_events, window_seconds=window_seconds)
-    summary = build_incident_summary(incidents)
+    incidents, incident_metrics = build_incidents(enriched_events, window_seconds=window_seconds)
+    summary = build_incident_summary(incidents, incident_metrics)
+    analyst_summary = build_analyst_summary(incidents, incident_metrics)
 
     incidents_output_path.parent.mkdir(parents=True, exist_ok=True)
     summary_output_path.parent.mkdir(parents=True, exist_ok=True)
+    if analyst_summary_output_path is not None:
+        analyst_summary_output_path.parent.mkdir(parents=True, exist_ok=True)
     incidents_output_path.write_text(json.dumps({"incidents": incidents}, indent=2, ensure_ascii=False), encoding="utf-8")
     summary_output_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    if analyst_summary_output_path is not None:
+        analyst_summary_output_path.write_text(json.dumps(analyst_summary, indent=2, ensure_ascii=False), encoding="utf-8")
     return summary
 
 
-def build_incidents(enriched_events: list[dict[str, Any]], window_seconds: float) -> list[dict[str, Any]]:
+def build_incidents(enriched_events: list[dict[str, Any]], window_seconds: float) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     filtered_events: list[dict[str, Any]] = []
+    suppression_metrics = Counter()
     for event in enriched_events:
-        include, normalized_incident_type = _should_include_in_incidents(event)
+        include, normalized_incident_type, suppression_label = _should_include_in_incidents(event)
         if not include:
+            suppression_metrics.update([suppression_label or "suppressed_single_events"])
             continue
         event_copy = dict(event)
         event_copy["_incident_type"] = normalized_incident_type
@@ -94,10 +102,11 @@ def build_incidents(enriched_events: list[dict[str, Any]], window_seconds: float
         ),
         reverse=True,
     )
-    return incidents
+    incident_metrics = _build_incident_metrics(incidents, suppression_metrics)
+    return incidents, incident_metrics
 
 
-def _should_include_in_incidents(event: dict[str, Any]) -> tuple[bool, str]:
+def _should_include_in_incidents(event: dict[str, Any]) -> tuple[bool, str, str | None]:
     incident_type = str(event.get("incident_type") or "informational")
     severity_score = to_int(event.get("severity_score"), 0)
     incident_candidate = bool(event.get("incident_candidate"))
@@ -105,21 +114,28 @@ def _should_include_in_incidents(event: dict[str, Any]) -> tuple[bool, str]:
     disconnect_label = str(event.get("disconnect_diagnostic_label") or "")
 
     if "client_flapping" in tags or disconnect_label == "client_flapping":
-        return True, "client_flapping"
+        if severity_score >= 80 or "wifi_security" in tags:
+            return True, "client_flapping", None
+        return False, "client_flapping", "suppressed_single_events"
 
     if disconnect_label == "probable_unifi_duplicate_noise" or incident_type == "wifi_noise":
-        return True, "wifi_noise"
+        if severity_score >= 80 or "wifi_security" in tags:
+            return True, "wifi_noise", None
+        return False, "wifi_noise", "noise_unifi"
 
     if incident_type == "wifi_security":
-        return True, "wifi_security"
+        return True, "wifi_security", None
 
     if incident_type == "wifi_instability":
-        return severity_score >= 50 or incident_candidate, "wifi_instability"
+        include = severity_score >= 50 or incident_candidate
+        return include, "wifi_instability", "low_priority_patterns" if not include else None
 
     if incident_type in {"informational", "device_config", "device_management"}:
-        return severity_score >= 50, incident_type
+        include = severity_score >= 50
+        return include, incident_type, "low_priority_patterns" if not include else None
 
-    return severity_score >= 50, incident_type
+    include = severity_score >= 50
+    return include, incident_type, "low_priority_patterns" if not include else None
 
 
 def _event_time_seconds(event: dict[str, Any]) -> float | None:
@@ -245,6 +261,8 @@ def _finalize_incident(incident: dict[str, Any], sequence_number: int) -> dict[s
     last_seen_seconds = to_float(incident.get("last_seen_seconds"), first_seen_seconds)
     duration_seconds = round(max(0.0, (last_seen_seconds or 0.0) - (first_seen_seconds or 0.0)), 3)
 
+    analyst_priority = _analyst_priority(incident_type, final_score, event_count, source_ips, radios, ap_macs, detection_tags)
+    why_it_matters = _why_it_matters(incident_type, analyst_priority, event_count)
     recommended_action = _recommended_action(incident_type)
     evidence_summary = (
         f"{event_count} eventi canonici correlati per client {incident.get('client_mac')} "
@@ -256,6 +274,7 @@ def _finalize_incident(incident: dict[str, Any], sequence_number: int) -> dict[s
         "incident_type": incident_type,
         "severity_score": final_score,
         "severity_level": severity_level,
+        "analyst_priority": analyst_priority,
         "confidence_score": confidence_score,
         "status": "open",
         "first_seen": incident.get("first_seen") or None,
@@ -269,6 +288,7 @@ def _finalize_incident(incident: dict[str, Any], sequence_number: int) -> dict[s
         "canonical_event_ids": canonical_event_ids,
         "event_type_distribution": event_type_distribution,
         "detection_tags": detection_tags,
+        "why_it_matters": why_it_matters,
         "primary_detection_reason": primary_reason,
         "evidence_summary": evidence_summary,
         "recommended_action": recommended_action,
@@ -287,7 +307,7 @@ def _recommended_action(incident_type: str) -> str:
     return "Verificare il contesto operativo e correlare con altri segnali SIEM prima di intervenire."
 
 
-def build_incident_summary(incidents: list[dict[str, Any]]) -> dict[str, Any]:
+def build_incident_summary(incidents: list[dict[str, Any]], incident_metrics: dict[str, Any]) -> dict[str, Any]:
     severity_distribution = Counter(str(item.get("severity_level") or "info") for item in incidents)
     incident_type_distribution = Counter(str(item.get("incident_type") or "informational") for item in incidents)
 
@@ -316,10 +336,21 @@ def build_incident_summary(incidents: list[dict[str, Any]]) -> dict[str, Any]:
     first_seen_values = [str(item.get("first_seen")) for item in incidents if item.get("first_seen")]
     last_seen_values = [str(item.get("last_seen")) for item in incidents if item.get("last_seen")]
 
+    priority_distribution = Counter(str(item.get("analyst_priority") or "P3") for item in incidents)
+    true_incidents = [item for item in incidents if item.get("analyst_priority") != "noise"]
+    top_problematic_clients = _top_entity_from_incidents(true_incidents, "client_mac", "client_mac")
+    top_involved_source_ips = _top_nested_entity(true_incidents, "source_ips", "source_ip")
+    top_involved_radios = _top_nested_entity(true_incidents, "radios", "radio")
+    top_involved_ap_macs = _top_nested_entity(true_incidents, "ap_macs", "ap_mac")
+
     return {
         "total_incidents": len(incidents),
+        "total_true_incidents": len(true_incidents),
+        "total_noise_incidents": len(incidents) - len(true_incidents),
+        "suppressed_single_event_count": incident_metrics.get("suppressed_single_events", 0),
         "severity_distribution": dict(sorted(severity_distribution.items())),
         "incident_type_distribution": dict(sorted(incident_type_distribution.items())),
+        "analyst_priority_distribution": dict(sorted(priority_distribution.items())),
         "top_clients": [{"client_mac": client, "incident_count": count} for client, count in top_clients.most_common(10)],
         "top_source_ips": [{"source_ip": ip, "incident_count": count} for ip, count in source_counter.most_common(10)],
         "top_detection_tags": [{"tag": tag, "count": count} for tag, count in tag_counter.most_common(10)],
@@ -340,4 +371,102 @@ def build_incident_summary(incidents: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "average_events_per_incident": average_events_per_incident,
         "max_events_per_incident": max_events_per_incident,
+        "top_true_incidents": [
+            {
+                "incident_id": item.get("incident_id"),
+                "incident_type": item.get("incident_type"),
+                "analyst_priority": item.get("analyst_priority"),
+                "severity_score": item.get("severity_score"),
+                "canonical_event_count": item.get("canonical_event_count"),
+            }
+            for item in sorted(true_incidents, key=lambda i: (int(i.get("severity_score") or 0), int(i.get("canonical_event_count") or 0)), reverse=True)[:10]
+        ],
+        "top_problematic_clients": top_problematic_clients,
+        "top_involved_source_ips": top_involved_source_ips,
+        "top_involved_radios": top_involved_radios,
+        "top_involved_ap_macs": top_involved_ap_macs,
+        "suppressed_events_breakdown": incident_metrics,
+    }
+
+
+def _analyst_priority(incident_type: str, final_score: int, event_count: int, source_ips: list[str], radios: list[str], ap_macs: list[str], detection_tags: list[str]) -> str:
+    tags = set(detection_tags)
+    if incident_type == "wifi_noise":
+        return "noise"
+    if incident_type == "wifi_security" or final_score >= 80:
+        return "P1"
+    if event_count >= 5 and (len(source_ips) > 1 or len(radios) > 1 or len(ap_macs) > 1):
+        return "P1"
+    if {"poor_rssi", "repeated_disconnect"}.intersection(tags) and event_count >= 3:
+        return "P1"
+    if event_count >= 3 or final_score >= 60:
+        return "P2"
+    return "P3"
+
+
+def _why_it_matters(incident_type: str, analyst_priority: str, event_count: int) -> str:
+    if analyst_priority == "noise":
+        return "Segnale classificato come rumore UniFi non azionabile; mantenuto per contabilità SIEM."
+    return f"Incidente {incident_type} con {event_count} eventi correlati, priorità {analyst_priority} per investigazione operativa."
+
+
+def _build_incident_metrics(incidents: list[dict[str, Any]], suppression_metrics: Counter[str]) -> dict[str, Any]:
+    metrics = Counter(suppression_metrics)
+    for incident in incidents:
+        priority = str(incident.get("analyst_priority") or "P3")
+        if priority == "noise":
+            metrics.update(["noise_unifi_incidents"])
+        elif priority == "P3":
+            metrics.update(["low_priority_incidents"])
+        else:
+            metrics.update(["true_incidents"])
+        if str(incident.get("incident_type") or "") == "wifi_security":
+            metrics.update(["security_findings"])
+    return dict(metrics)
+
+
+def _top_entity_from_incidents(incidents: list[dict[str, Any]], field: str, output_field: str) -> list[dict[str, Any]]:
+    counter = Counter(str(item.get(field) or "unknown") for item in incidents)
+    return [{output_field: key, "count": value} for key, value in counter.most_common(10)]
+
+
+def _top_nested_entity(incidents: list[dict[str, Any]], field: str, output_field: str) -> list[dict[str, Any]]:
+    counter = Counter()
+    for item in incidents:
+        counter.update(str(val) for val in item.get(field, []) if val)
+    return [{output_field: key, "count": value} for key, value in counter.most_common(10)]
+
+
+def build_analyst_summary(incidents: list[dict[str, Any]], incident_metrics: dict[str, Any]) -> dict[str, Any]:
+    true_incidents = [item for item in incidents if item.get("analyst_priority") in {"P1", "P2", "P3"}]
+    security_findings = [item for item in true_incidents if item.get("incident_type") == "wifi_security"]
+    return {
+        "executive_summary": f"{len(true_incidents)} incidenti reali da revisionare; rumore/soppressioni contabilizzati separatamente.",
+        "true_incidents_to_review": true_incidents[:20],
+        "problematic_clients": _top_entity_from_incidents(true_incidents, "client_mac", "client_mac"),
+        "involved_source_ips": _top_nested_entity(true_incidents, "source_ips", "source_ip"),
+        "involved_radios": _top_nested_entity(true_incidents, "radios", "radio"),
+        "involved_ap_macs": _top_nested_entity(true_incidents, "ap_macs", "ap_mac"),
+        "unifi_noise_summary": {
+            "noise_unifi_events": incident_metrics.get("noise_unifi", 0),
+            "noise_unifi_incidents": incident_metrics.get("noise_unifi_incidents", 0),
+        },
+        "suppressed_events_summary": {
+            "suppressed_single_events": incident_metrics.get("suppressed_single_events", 0),
+            "low_priority_patterns": incident_metrics.get("low_priority_patterns", 0),
+        },
+        "recommended_operational_checks": [
+            "Verificare client con flapping persistente su più radio/AP.",
+            "Controllare AP/radio con disconnessioni ripetute e poor RSSI.",
+            "Revisionare eventi wifi_security come priorità alta.",
+        ],
+        "siem_readiness_notes": [
+            "Nessun evento enriched rimosso: la soppressione è solo nel layer incident/reporting.",
+            "Eventi soppressi mantenuti in contatori dedicati per audit e tuning.",
+        ],
+        "quality_guardrails": {
+            "security_findings": len(security_findings),
+            "true_incident_count": len(true_incidents),
+            "suppression_metrics": incident_metrics,
+        },
     }
