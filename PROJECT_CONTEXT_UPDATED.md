@@ -137,3 +137,44 @@ Preparare export OpenSearch/SIEM (NDJSON) con schema campi stabile:
   - incidents
   - incident summary / analyst summary
 - preservare separazione tra completezza dati e prioritizzazione analyst.
+
+## Nuovo layer OpenSearch / SIEM export
+Introdotto un export layer dedicato (`siem_exporter.py`) che legge gli output già prodotti e genera file ingestion-ready senza modificare parser, canonicalizer, detection layer, incident builder o suppression strategy.
+
+### File prodotti in `data/output/opensearch/`
+- `canonical_events_bulk.ndjson` → indice `unifi-canonical-events` (eventi canonical enriched completi)
+- `incidents_bulk.ndjson` → indice `unifi-incidents` (incidenti finali)
+- `analyst_summary_bulk.ndjson` → indice `unifi-analyst-summary` (documento summary)
+- `export_manifest.json` → metadati export, conteggi, guardrail, esempi import
+- `opensearch_index_templates.json` → template/mapping suggeriti per i 3 indici
+
+### Schema logico indici
+- **canonical events index**: telemetria evento completa + campi SIEM-friendly (`@timestamp`, `event.*`, `observer.*`, `client.*`, `labels.*`, `unifi.*`)
+- **incidents index**: vista alert/incident con campi `incident.*`, priorità analyst e score impatto operativo
+- **analyst summary index**: vista metrica/esecutiva per dashboard SOC e readiness
+
+### Campi SIEM-friendly aggiunti (additivi)
+Aggiunti campi normalizzati (senza rimuovere campi originali):
+- `@timestamp`
+- `event.dataset`, `event.module`, `event.kind`, `event.id`, `event.category`, `event.type`, `event.risk_score`, `event.severity`
+- `observer.ip`, `observer.name`, `client.mac`, `access_point.mac`, `wifi.radio`
+- `incident.*` per documenti incident
+- `labels.*` e campi `unifi.*` di supporto operativo
+
+### Nota formato NDJSON bulk
+I file bulk rispettano il formato OpenSearch Bulk API:
+- riga action/metadata + riga documento
+- ogni JSON su singola riga compatta
+- nessuna virgola tra righe
+- newline finale obbligatorio
+- encoding UTF-8, `ensure_ascii=False`
+
+### Guardrail mantenuti
+- nessuna chiamata HTTP verso OpenSearch (solo generazione file)
+- nessuna alterazione distruttiva dei dataset sorgente
+- separazione preservata tra dataset completi (`enriched_canonical_events`) e viste analyst/SIEM
+
+### Prossimi step consigliati
+1. test di import bulk su OpenSearch locale
+2. creazione dashboard (eventi, incidenti, executive summary)
+3. estensione futura con mapping MITRE ATT&CK (tag/technique enrichment)
